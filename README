@@ -1,0 +1,28 @@
+Building Kernel;
+
+Repo: https://github.com/beagleboard/linux
+Branch: 4.19.94-ti-r42
+
+export ARCH=arm
+export CROSS_COMPILE=arm-linux-gnueabi-
+
+mkdir -p build/kernel/images
+mkdir -p build/kernel/modules
+mkdir -p build/kernel/headers
+
+export KERNEL_OUT=`pwd`/build/kernel/images
+export MODULES_OUT=`pwd`/build/kernel/modules
+export HEADERS_OUT=`pwd`/build/kernel/headers
+
+make O=$KERNEL_OUT bb.org_defconfig
+make O=$KERNEL_OUT menuconfig
+make O=$KERNEL_OUT LOADADDR=0x80000000 uImage dtbs -j$(nproc)
+make O=$KERNEL_OUT modules -j$(nproc)
+make O=$KERNEL_OUT INSTALL_MOD_STRIP=1 INSTALL_MOD_PATH=$MODULES_OUT modules_install
+make O=$KERNEL_OUT INSTALL_HDR_PATH=$HEADERS_OUT headers_install
+
+Copy zImage to /boot
+Copy modules to /lib/modules
+
+Modify uEnv.txt - change uname_r value to kernel name
+

@@ -11,17 +11,130 @@
 #include <linux/i2c.h>
 #include <linux/module.h>
 #include <linux/pm_runtime.h>
+#include <linux/iio/iio.h>
+#include <linux/iio/sysfs.h>
 
-static int tsl2591_probe(struct i2c_client *clientp,
-			 const struct i2c_device_id *idp)
+struct tsl2591_chip {
+	struct i2c_client *client;
+};
+
+static struct attribute *sysfs_attrs_ctrl[] = {
+	NULL
+};
+
+static const struct attribute_group tsl2591_attribute_group = {
+	.attrs = sysfs_attrs_ctrl,
+};
+
+/* Multiple channels can be specified - e.g. infrared light vs visible light */
+static const struct iio_chan_spec tsl2591_channels[] = {
+   {
+		.type = IIO_LIGHT,
+		.modified = 1,
+		.channel2 = IIO_MOD_LIGHT_IR,
+		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),
+	},
+	{
+		.type = IIO_LIGHT,
+		.modified = 1,
+		.channel2 = IIO_MOD_LIGHT_BOTH,
+		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),
+	},
+};
+
+static int tsl2591_read_raw(struct iio_dev *indio_dev,
+			    struct iio_chan_spec const *chan,
+			    int *val, int *val2, long mask)
 {
-   dev_info(&clientp->dev, "Probing device.\n");
+   printk("Reading value from device.\n");
+
+   return 0;
+}
+
+static int tsl2591_write_raw(struct iio_dev *indio_dev,
+			     struct iio_chan_spec const *chan,
+			     int val, int val2, long mask)
+{
+   printk("Writing value to device.\n");
+
+   return 0;
+}
+
+static const struct iio_info tsl2591_info = {
+	.attrs = &tsl2591_attribute_group, /* General purpose device attributes */
+	.read_raw = tsl2591_read_raw, /* Requesting a value from the device */
+	.write_raw = tsl2591_write_raw, /* Writing a value to the device */
+};
+
+static int tsl2591_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
+{
+   int ret = 0;
+   struct tsl2591_chip *chip;
+	struct iio_dev *indio_dev;
+
+   dev_info(&client->dev, "Start probing device.\n");
+
+   /* This checks whether the i2c adapter supports smbus byte write and read functionality */
+   /* If this functionality is not present, no point continuing because this i2c client driver */
+   /* will not work with the i2c adapter it's attached to */
+   if (!i2c_check_functionality(client->adapter,
+			     I2C_FUNC_SMBUS_BYTE_DATA)) {
+	   dev_err(&client->dev, "%s: i2c smbus byte data functionality is not supported\n",
+		__func__);
+		return -EOPNOTSUPP;
+	}
+
+   /* Allocate an iio device using the tsl2591 structure */
+   /* devm means memory is managed and free'd automatically */
+   indio_dev = devm_iio_device_alloc(&client->dev, sizeof(*chip));
+	if (!indio_dev) {
+		return -ENOMEM;
+   }
+
+   /* Assign allocated memory iio device to chip */
+   /* Assign parsed i2c client to internal i2c client in tsl2591 structure */
+   chip = iio_priv(indio_dev);
+	chip->client = client;
+	i2c_set_clientdata(client, indio_dev);
+
+   /* All chip handshaking would go here */
+   /*---------------------------------------*/
+
+   /* Initialise iio device info */
+   indio_dev->info = &tsl2591_info; /* callbacks and constant info from driver */
+	indio_dev->channels = tsl2591_channels; /* channel spec table */
+	indio_dev->num_channels = ARRAY_SIZE(tsl2591_channels); /* num channels */
+	indio_dev->modes = INDIO_DIRECT_MODE; /* operating modes supported by device */
+	indio_dev->name = chip->client->name; /* name of device */
+
+   /* Add power management handling here */
+   /* --------------------------------------*/
+
+   if (!indio_dev) {
+		return -ENOMEM;
+   }
+   /* Register the device on the iio framework */
+   ret = devm_iio_device_register(indio_dev->dev.parent, indio_dev);
+	if (ret) {
+		dev_err(&client->dev, "%s: iio registration failed\n",
+			__func__);
+		return ret;
+	}
+
+   dev_info(&client->dev, "Probe complete - Light sensor found.\n");
+
 	return 0;
 }
 
 static int tsl2591_remove(struct i2c_client *client)
 {
+   struct iio_dev *indio_dev = i2c_get_clientdata(client);
+
    dev_info(&client->dev, "Removing device.\n");
+
+	iio_device_unregister(indio_dev);
+
    return 0;
 }
 

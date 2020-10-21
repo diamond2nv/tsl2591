@@ -1,0 +1,21 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+  compatible = "ti,beaglebone", "ti,beaglebone-black";
+  part-number = "TSL2591-I2C2";
+  version = "00A0";
+
+  fragment@0 {
+    target = <&i2c2>;
+
+    __overlay__ {
+      tsl2591: tsl2591@0f {
+          compatible = "amstaos,tsl2591";
+          #address-cells = <1>;
+          #size-cells = <0>;
+          reg = <0x0f>;
+      };
+    };
+  };
+};

@@ -26,3 +26,9 @@ Copy modules to /lib/modules
 
 Modify uEnv.txt - change uname_r value to kernel name
 
+Compile dtb overlay
+dtc -O dtb -o <filename>-00A0.dtbo -b 0 -@ <filename>.dts
+
+Modify uEnv.txt - Adding dtbo as overlay in uEnv.txt
+uboot_overlay_addr0=/lib/firmware/<file0>.dtbo
+

@@ -1,0 +1,120 @@
+TSL2591 Integration Notes
+
+Pinout;
+Pin 1: SCL I2C Clock
+Pin 2: Interrupt
+Pin 3: GND
+Pin 4: Do not connect
+Pin 5: VDD
+Pin 6: SDA I2C Data
+
+Registers;
+0x00 = ENABLE states and interrupts
+0x01 = CONFIG ALS gain and integration time
+0x04 = ALS interrupt low threshold low byte
+0x05 = ALS interrupt low threshold high byte
+0x06 = ALS interrupt high threshold low byte
+0x07 = ALS interrupt high threshold high byte
+0x08 = No persist ALS interrupt low threshold low byte
+0x09 = No persist ALS interrupt low threshold high byte
+0x0A = No persist ALS interrupt high threshold low byte
+0x0B = No persist ALS interrupt high threshold high byte
+0x0C = Interrupt persistence filter
+0x11 = Package ID
+0x12 = Device ID
+0x13 = Device status
+0x14 = Channel 0 ADC low data byte
+0x15 = Channel 0 ADC high data byte
+0x16 = Channel 1 ADC low data byte
+0x17 = Channel 1 ADC high data byte
+
+Command reg masks;
+7 6 5 4 3 2 1 0
+7 = CMD
+6, 5 = TRANSACTION
+4, 3, 2, 1 = ADDR/SF
+
+0xA0 = Normal write (CMD=1, TRANSACTION=01 (normal op))
+0xD4 = Special Function interrupt set (force interrupt)(CMD=1, TRANSACTION=11, ADDR/SF=00100)
+0xD5 = Special Function clear ALS interrupt (CMD=1, TRANSACTION=11, ADDR/SF=00110)
+0xD7 = Special Function clear ALS and no persist interrupt (CMD=1, TRANSACTION=11, ADDR/SF=00111)
+0xDA = Special Function clear no persist ALS interrupt (CMD=1, TRANSACTION=11, ADDR/SF=01010)
+
+Enable reg masks;
+7 6 5 4 3 2 1 0
+7 = NPIEN
+6 = SAI
+5 = Reserved
+4 = AIEN
+3, 2 = Reserved
+1 = AEN
+0 = PON
+
+0x01 = POWER ON
+0x02 = ALS Enable
+0x10 = ALS interrupt enable
+0x40 = Sleep after interrupt (device will power down at end of ALS cycle)
+0x80 = No persist interrupt enable
+
+Control reg masks;
+7 6 5 4 3 2 1 0
+7 = SRESET
+6 = Reserved
+5, 4 = AGAIN
+3 = Reserved
+2, 1, 0 = ATIME
+
+0x00 = ALS integration time 100ms
+0x01 = ALS integration time 200ms
+0x02 = ALS integration time 300ms
+0x03 = ALS integration time 400ms
+0x04 = ALS integration time 500ms
+0x05 = ALS integration time 600ms
+0x00 = ALS low gain mode
+0x10 = ALS medium gain mode
+0x20 = ALS high gain mode
+0x30 = ALS max gain mode
+0x80 = System reset - equivalent to POR
+
+Persist reg masks; (sets number of consecutive out of range ALS cycles needed to gen interrupt)
+7 6 5 4 3 2 1 0
+7, 6, 5, 4 = Reserved
+3, 2, 1, 0 = APERS
+
+0x00 = Every ALS cycle generates interrupt
+0x01 = Any value outside of threshold range
+0x02 = 2 cycles
+0x03 = 3 cycles
+0x04 = 5 cycles
+0x05 = 10 cycles
+0x06 = 15 cycles
+0x07 = 20 cycles
+0x08 = 25 cycles
+0x09 = 30 cycles
+0x0A = 35 cycles
+0x0B = 40 cycles
+0x0C = 45 cycles
+0x0D = 50 cycles
+0x0E = 55 cycles
+0x0F = 60 cycles
+
+PID reg masks; (id of device package)
+7 6 5 4 3 2 1 0
+7,6,3,2,1,0 = Reserved
+5,4 = package id (00)
+
+0x30 = Package ID
+
+ID reg; (device ID)
+7:0 = ID (val = 0x50)
+
+Status reg masks;
+7 6 5 4 3 2 1 0
+7,6,3,2,1 = Reserved
+5 = NPINTR
+4 = AINT
+0 = AVALID
+
+0x00 = ALS valid - indicates that the ADC channels have completed a cycle since AEN was asserted
+0x10 = ALS interrupt - indicates an interrupt is being asserted
+0x20 = No persist interrupt - indicates no persist interrupt condition has encountered

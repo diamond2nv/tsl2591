@@ -45,6 +45,7 @@
 
 /* TSL2591 Enable Register Masks */
 #define TSL2591_PWR_ON              0x01
+#define TSL2591_PWR_OFF             0x00
 #define TSL2591_ENABLE_ALS          0x02
 #define TSL2591_ENABLE_ALS_INT      0x10
 #define TSL2591_ENABLE_SLEEP_INT    0x40
@@ -96,10 +97,43 @@
 #define TSL2591_PACKAGE_ID_VAL  0x00
 #define TSL2591_DEVICE_ID_VAL   0x50
 
+/* Power off suspend delay time MS */
+#define TSL2591_POWER_OFF_DELAY_MS	2000
+
 struct tsl2591_chip {
 	struct mutex als_mutex;
 	struct i2c_client *client;
 };
+
+static int tsl2591_set_power_state(struct tsl2591_chip *chip, u8 state)
+{
+	int ret;
+
+	ret = i2c_smbus_write_byte_data(chip->client,
+					TSL2591_CMD_NOP | TSL2591_ENABLE, state);
+	if (ret < 0)
+		dev_err(&chip->client->dev,
+			"%s: failed to set the power state to %d\n", __func__,
+			state);
+
+	return ret;
+}
+
+static int tsl2591_set_pm_runtime_busy(struct tsl2591_chip *chip, bool busy)
+{
+	int ret;
+
+	if (busy) {
+		ret = pm_runtime_get_sync(&chip->client->dev);
+		if (ret < 0)
+			pm_runtime_put_noidle(&chip->client->dev);
+	} else {
+		pm_runtime_mark_last_busy(&chip->client->dev);
+		ret = pm_runtime_put_autosuspend(&chip->client->dev);
+	}
+
+	return ret;
+}
 
 static struct attribute *sysfs_attrs_ctrl[] = {
 	NULL
@@ -129,7 +163,18 @@ static int tsl2591_read_raw(struct iio_dev *indio_dev,
 			    struct iio_chan_spec const *chan,
 			    int *val, int *val2, long mask)
 {
+	struct tsl2591_chip *chip = iio_priv(indio_dev);
+	int ret;
+
+	ret = tsl2591_set_pm_runtime_busy(chip, true);
+	if (ret < 0)
+		return ret;
+
 	printk("Reading value from device.\n");
+
+	ret = tsl2591_set_pm_runtime_busy(chip, false);
+	if (ret < 0)
+		return ret;
 
 	return 0;
 }
@@ -138,7 +183,18 @@ static int tsl2591_write_raw(struct iio_dev *indio_dev,
 			     struct iio_chan_spec const *chan,
 			     int val, int val2, long mask)
 {
+	struct tsl2591_chip *chip = iio_priv(indio_dev);
+	int ret;
+
+	ret = tsl2591_set_pm_runtime_busy(chip, true);
+	if (ret < 0)
+		return ret;
+
 	printk("Writing value to device.\n");
+
+	ret = tsl2591_set_pm_runtime_busy(chip, false);
+	if (ret < 0)
+		return ret;
 
 	return 0;
 }
@@ -182,22 +238,6 @@ static int tsl2591_probe(struct i2c_client *client,
 
 	mutex_init(&chip->als_mutex);
 
-	/* Read the package ID number */
-	ret = i2c_smbus_read_byte_data(client,
-				       TSL2591_CMD_NOP | TSL2591_PACKAGE_ID);
-
-	if (ret < 0) {
-		dev_err(&client->dev,
-			"%s: failed to read the package ID register\n", __func__);
-		return ret;
-	}
-
-	if ((ret & TSL2591_PACKAGE_ID_MASK) != TSL2591_PACKAGE_ID_VAL) {
-		dev_err(&client->dev, "%s: received an unknown package ID %x\n",
-			__func__, ret);
-		return -EINVAL;
-	}
-
 	/* Read the device ID number */
 	ret = i2c_smbus_read_byte_data(client,
 				       TSL2591_CMD_NOP | TSL2591_DEVICE_ID);
@@ -221,8 +261,10 @@ static int tsl2591_probe(struct i2c_client *client,
 	indio_dev->modes = INDIO_DIRECT_MODE; /* operating modes supported by device */
 	indio_dev->name = chip->client->name; /* name of device */
 
-	/* Add power management handling here */
-	/* --------------------------------------*/
+	pm_runtime_enable(&client->dev);
+	pm_runtime_set_autosuspend_delay(&client->dev,
+					 TSL2591_POWER_OFF_DELAY_MS);
+	pm_runtime_use_autosuspend(&client->dev);
 
 	/* Register the device on the iio framework */
 	ret = devm_iio_device_register(indio_dev->dev.parent, indio_dev);
@@ -232,6 +274,8 @@ static int tsl2591_probe(struct i2c_client *client,
 		return ret;
 	}
 
+	/* Parse dt node - get default chip config */
+
 	dev_info(&client->dev, "Probe complete - Light sensor found.\n");
 
 	return 0;
@@ -240,23 +284,49 @@ static int tsl2591_probe(struct i2c_client *client,
 static int tsl2591_remove(struct i2c_client *client)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
+	struct tsl2591_chip *chip = iio_priv(indio_dev);
 
 	dev_info(&client->dev, "Removing device.\n");
 
 	iio_device_unregister(indio_dev);
 
-	return 0;
+	pm_runtime_disable(&client->dev);
+	pm_runtime_set_suspended(&client->dev);
+	pm_runtime_put_noidle(&client->dev);
+
+	return tsl2591_set_power_state(chip, TSL2591_PWR_OFF);
 }
 
 static int __maybe_unused tsl2591_suspend(struct device *dev)
 {
-	return 0;
+	struct iio_dev *indio_dev = i2c_get_clientdata(to_i2c_client(dev));
+	struct tsl2591_chip *chip = iio_priv(indio_dev);
+	int ret;
+
+	mutex_lock(&chip->als_mutex);
+
+	printk("PM Suspending tsl2591.\n");
+	ret = tsl2591_set_power_state(chip, TSL2591_PWR_OFF);
+
+	mutex_unlock(&chip->als_mutex);
+
+	return ret;
 }
 
-/* REMOVE: __maybe_unused - gcc does not flag warning if this function is not used */
 static int __maybe_unused tsl2591_resume(struct device *dev)
 {
-	return 0;
+	struct iio_dev *indio_dev = i2c_get_clientdata(to_i2c_client(dev));
+	struct tsl2591_chip *chip = iio_priv(indio_dev);
+	int ret;
+
+	mutex_lock(&chip->als_mutex);
+
+	printk("PM Resuming tsl2591.\n");
+	ret = tsl2591_set_power_state(chip, TSL2591_PWR_ON);
+
+	mutex_unlock(&chip->als_mutex);
+
+	return ret;
 }
 
 static const struct dev_pm_ops tsl2591_pm_ops = {

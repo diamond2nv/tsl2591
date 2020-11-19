@@ -1,5 +1,8 @@
 TSL2591 Integration Notes
 
+I2C Address = 0x29
+I2C Address (Secondary - for RO) = 0x28
+
 Pinout;
 Pin 1: SCL I2C Clock
 Pin 2: Interrupt

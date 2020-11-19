@@ -10,11 +10,11 @@
     target = <&i2c2>;
 
     __overlay__ {
-      tsl2591: tsl2591@0f {
+      tsl2591: tsl2591@29 {
           compatible = "amstaos,tsl2591";
           #address-cells = <1>;
           #size-cells = <0>;
-          reg = <0x0f>;
+          reg = <0x29>;
       };
     };
   };

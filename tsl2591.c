@@ -108,11 +108,27 @@ struct tsl2591_chip {
 static int tsl2591_get_lux_data(struct iio_dev *indio_dev)
 {
 	struct tsl2591_chip *chip = iio_priv(indio_dev);
+	struct i2c_client *client = chip->client;
 
-	int ret;
+	u16 ch0;
+	u8 ch0_l;
+	u8 ch0_h;
 
+	ch0_l = i2c_smbus_read_byte_data(client,
+				    TSL2591_CMD_NOP | TSL2591_C0_DATAL);
 
-	return 0;
+	printk("Channel 0 Low: %d\n", ch0_l);
+
+	ch0_h = i2c_smbus_read_byte_data(client,
+				    TSL2591_CMD_NOP | TSL2591_C0_DATAH);
+
+	printk("Channel 0 High: %d\n", ch0_h);
+
+	ch0 = (ch0_h << 8) | ch0_l;
+
+	printk("Channel 0 Combined: %d\n", ch0);
+
+	return ch0;
 }
 
 static int tsl2591_set_power_state(struct tsl2591_chip *chip, u8 state)
@@ -179,6 +195,7 @@ static int tsl2591_read_raw(struct iio_dev *indio_dev,
 	printk("Reading value from device.\n");
 
 	ret = tsl2591_set_pm_runtime_busy(chip, true);
+
 	if (ret < 0)
 		return ret;
 
@@ -354,7 +371,7 @@ static int __maybe_unused tsl2591_resume(struct device *dev)
 	mutex_lock(&chip->als_mutex);
 
 	printk("PM Resuming tsl2591.\n");
-	ret = tsl2591_set_power_state(chip, TSL2591_PWR_ON);
+	ret = tsl2591_set_power_state(chip, TSL2591_PWR_ON | TSL2591_ENABLE_ALS);
 
 	mutex_unlock(&chip->als_mutex);
 

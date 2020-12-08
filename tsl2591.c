@@ -105,6 +105,16 @@ struct tsl2591_chip {
 	struct i2c_client *client;
 };
 
+static int tsl2591_get_lux_data(struct iio_dev *indio_dev)
+{
+	struct tsl2591_chip *chip = iio_priv(indio_dev);
+
+	int ret;
+
+
+	return 0;
+}
+
 static int tsl2591_set_power_state(struct tsl2591_chip *chip, u8 state)
 {
 	int ret;
@@ -164,19 +174,37 @@ static int tsl2591_read_raw(struct iio_dev *indio_dev,
 			    int *val, int *val2, long mask)
 {
 	struct tsl2591_chip *chip = iio_priv(indio_dev);
-	int ret;
+	int ret, pm_ret;
+
+	printk("Reading value from device.\n");
 
 	ret = tsl2591_set_pm_runtime_busy(chip, true);
 	if (ret < 0)
 		return ret;
 
-	printk("Reading value from device.\n");
+	mutex_lock(&chip->als_mutex);
 
-	ret = tsl2591_set_pm_runtime_busy(chip, false);
-	if (ret < 0)
-		return ret;
+	ret = -EINVAL;
+	switch (mask) {
+		case IIO_CHAN_INFO_RAW:
+			if (chan->type == IIO_LIGHT){
+				ret = tsl2591_get_lux_data(indio_dev);
+				if (ret < 0){
+					break;
+				}
+				*val = ret;
+				ret = IIO_VAL_INT;
+			}
+			break;
+	}
 
-	return 0;
+	mutex_unlock(&chip->als_mutex);
+
+	pm_ret = tsl2591_set_pm_runtime_busy(chip, false);
+	if (pm_ret < 0)
+		return pm_ret;
+
+	return ret;
 }
 
 static int tsl2591_write_raw(struct iio_dev *indio_dev,
@@ -190,7 +218,11 @@ static int tsl2591_write_raw(struct iio_dev *indio_dev,
 	if (ret < 0)
 		return ret;
 
+	mutex_lock(&chip->als_mutex);
+
 	printk("Writing value to device.\n");
+
+	mutex_unlock(&chip->als_mutex);
 
 	ret = tsl2591_set_pm_runtime_busy(chip, false);
 	if (ret < 0)
@@ -266,8 +298,8 @@ static int tsl2591_probe(struct i2c_client *client,
 					 TSL2591_POWER_OFF_DELAY_MS);
 	pm_runtime_use_autosuspend(&client->dev);
 
+	ret = iio_device_register(indio_dev);
 	/* Register the device on the iio framework */
-	ret = devm_iio_device_register(indio_dev->dev.parent, indio_dev);
 	if (ret) {
 		dev_err(&client->dev, "%s: iio registration failed\n",
 			__func__);

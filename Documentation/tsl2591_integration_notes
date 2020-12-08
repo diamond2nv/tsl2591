@@ -121,3 +121,5 @@ Status reg masks;
 0x00 = ALS valid - indicates that the ADC channels have completed a cycle since AEN was asserted
 0x10 = ALS interrupt - indicates an interrupt is being asserted
 0x20 = No persist interrupt - indicates no persist interrupt condition has encountered
+
+Refer to this repo for configuration process and read/write: https://github.com/adafruit/Adafruit_TSL2591_Library

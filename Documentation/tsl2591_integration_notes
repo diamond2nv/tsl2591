@@ -123,3 +123,15 @@ Status reg masks;
 0x20 = No persist interrupt - indicates no persist interrupt condition has encountered
 
 Refer to this repo for configuration process and read/write: https://github.com/adafruit/Adafruit_TSL2591_Library
+
+FLOW OF CONTROL (SETUP);
+1. Read DEVICE_ID (CMD_BIT | DEVICE_ID)
+2. Enable device and device interrupt (CMD_BIT | REG_ENABLE, POWER_ON | ALS_ENABLE | ALS_INT_ENABLE | ALS_NO_PERSIST_INT_ENABLE)
+3. Set timing and gain (CMD_BIT | REG_CONTROL, DEFAULT_100MS_INT, DEFAULT_MED_GAIN)
+
+FLOW OF CONTROL (READING);
+1. Enable device
+2. Wait integration time for ADC to complete e.g. 100ms
+3. Read IR + Visible (Combined) -> Read channel 0 (CMD_BIT | CHAN0_LOW) and (CMD_BIT | CHAN0_HIGH)
+4. Read IR -> Read channel 1 (CMD_BIT | CHAN1_LOW) and (CMD_BIT | CHAN1_HIGH)
+5. Read Visible -> Read channel 0 and channel 1 -> Do channel 0 - channel 1 (Combined - IR)

@@ -15,10 +15,12 @@
 #include <linux/pm_runtime.h>
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
+#include <linux/debugfs.h>
+#include <linux/delay.h>
 
 /* TSL2591 Register Set */
 #define TSL2591_ENABLE      0x00
-#define TSL2591_CONFIG      0x01
+#define TSL2591_CONTROL     0x01
 #define TSL2591_AILTL       0x04
 #define TSL2591_AILTH       0x05
 #define TSL2591_AIHTL       0x06
@@ -100,46 +102,149 @@
 /* Power off suspend delay time MS */
 #define TSL2591_POWER_OFF_DELAY_MS	2000
 
+/* TSL2591 Default Values */
+#define DEFAULT_ALS_INTEGRATION_TIME    TSL2591_CTRL_ALS_INTEGRATION_300MS
+#define DEFAULT_ALS_GAIN                TSL2591_CTRL_ALS_MED_GAIN
+#define NUMBER_OF_DATA_CHANNELS         4
+
+static const u32 tsl2591_integration_opts[] = {
+	TSL2591_CTRL_ALS_INTEGRATION_100MS,
+	TSL2591_CTRL_ALS_INTEGRATION_200MS,
+	TSL2591_CTRL_ALS_INTEGRATION_300MS,
+	TSL2591_CTRL_ALS_INTEGRATION_400MS,
+	TSL2591_CTRL_ALS_INTEGRATION_500MS,
+	TSL2591_CTRL_ALS_INTEGRATION_600MS,
+};
+
+static const u32 tsl2591_gain_opts[] = {
+	TSL2591_CTRL_ALS_LOW_GAIN,
+	TSL2591_CTRL_ALS_MED_GAIN,
+	TSL2591_CTRL_ALS_HIGH_GAIN,
+	TSL2591_CTRL_ALS_MAX_GAIN,
+};
+
+static const u8 tsl2591_data_channels[] = {
+	TSL2591_C0_DATAL,
+	TSL2591_C0_DATAH,
+	TSL2591_C1_DATAL,
+	TSL2591_C1_DATAH,
+};
+
+struct tsl2591_als_readings {
+	u16 als_ch0;
+	u16 als_ch1;
+};
+
+struct tsl2591_settings {
+	u8 als_int_time;
+	u8 als_gain;
+};
+
 struct tsl2591_chip {
 	struct mutex als_mutex;
 	struct i2c_client *client;
+	struct tsl2591_settings als_settings;
+	struct tsl2591_als_readings als_readings;
 };
+
+static int tsl2591_wait_adc_complete(struct tsl2591_chip *chip)
+{
+	struct tsl2591_settings settings = chip->als_settings;
+	int delay;
+
+	switch (settings.als_int_time)
+	{
+		case TSL2591_CTRL_ALS_INTEGRATION_100MS:
+			delay = 100;
+			break;
+		case TSL2591_CTRL_ALS_INTEGRATION_200MS:
+			delay = 200;
+			break;
+		case TSL2591_CTRL_ALS_INTEGRATION_300MS:
+			delay = 300;
+			break;
+		case TSL2591_CTRL_ALS_INTEGRATION_400MS:
+			delay = 400;
+			break;
+		case TSL2591_CTRL_ALS_INTEGRATION_500MS:
+			delay = 500;
+			break;
+		case TSL2591_CTRL_ALS_INTEGRATION_600MS:
+			delay = 600;
+			break;
+		default:
+			delay = 600;
+	}
+
+	msleep(delay);
+
+	return 0;
+}
 
 static int tsl2591_get_lux_data(struct iio_dev *indio_dev)
 {
 	struct tsl2591_chip *chip = iio_priv(indio_dev);
 	struct i2c_client *client = chip->client;
+	int i;
+	int ret;
+	u8 channel_data[NUMBER_OF_DATA_CHANNELS];
 
-	u16 ch0;
-	u8 ch0_l;
-	u8 ch0_h;
+	tsl2591_wait_adc_complete(chip);
 
-	ch0_l = i2c_smbus_read_byte_data(client,
-				    TSL2591_CMD_NOP | TSL2591_C0_DATAL);
+	for (i = 0; i < NUMBER_OF_DATA_CHANNELS; ++i)
+	{
+		int reg = TSL2591_CMD_NOP | tsl2591_data_channels[i];
+		ret = i2c_smbus_read_byte_data(client, TSL2591_CMD_NOP | reg);
 
-	printk("Channel 0 Low: %d\n", ch0_l);
+		if (ret < 0) {
+			dev_err(&client->dev, "%s: failed to read register %x\n",
+				__func__, reg);
+			return -EINVAL;
+		}
+		channel_data[i] = ret;
+	}
 
-	ch0_h = i2c_smbus_read_byte_data(client,
-				    TSL2591_CMD_NOP | TSL2591_C0_DATAH);
+	chip->als_readings.als_ch0 = le16_to_cpup((const __le16 *)&channel_data[0]);
+	chip->als_readings.als_ch1 = le16_to_cpup((const __le16 *)&channel_data[2]);
 
-	printk("Channel 0 High: %d\n", ch0_h);
+	return 0;
+}
 
-	ch0 = (ch0_h << 8) | ch0_l;
+static int tsl2591_als_calibrate(struct tsl2591_chip *chip)
+{
+	struct i2c_client *client = chip->client;
+	struct tsl2591_settings als_settings = chip->als_settings;
+	int ret;
 
-	printk("Channel 0 Combined: %d\n", ch0);
+	u8 configuration;
 
-	return ch0;
+	dev_info(&client->dev, "Setting configuration - als_int_time: %x\n",
+				als_settings.als_int_time);
+	dev_info(&client->dev, "Setting configuration - als_gain: %x\n",
+				als_settings.als_gain);
+
+	configuration = als_settings.als_int_time | als_settings.als_gain;
+
+	ret = i2c_smbus_write_byte_data(client,
+					TSL2591_CMD_NOP | TSL2591_CONTROL, configuration);
+	if (ret < 0)
+		dev_err(&client->dev,
+			"%s: failed to set configuration to %x\n", __func__,
+			configuration);
+
+	return ret;
 }
 
 static int tsl2591_set_power_state(struct tsl2591_chip *chip, u8 state)
 {
+	struct i2c_client *client = chip->client;
 	int ret;
 
-	ret = i2c_smbus_write_byte_data(chip->client,
+	ret = i2c_smbus_write_byte_data(client,
 					TSL2591_CMD_NOP | TSL2591_ENABLE, state);
 	if (ret < 0)
-		dev_err(&chip->client->dev,
-			"%s: failed to set the power state to %d\n", __func__,
+		dev_err(&client->dev,
+			"%s: failed to set the power state to %x\n", __func__,
 			state);
 
 	return ret;
@@ -190,9 +295,10 @@ static int tsl2591_read_raw(struct iio_dev *indio_dev,
 			    int *val, int *val2, long mask)
 {
 	struct tsl2591_chip *chip = iio_priv(indio_dev);
+	struct i2c_client *client = chip->client;
 	int ret, pm_ret;
 
-	printk("Reading value from device.\n");
+	dev_dbg(&client->dev, "Reading from sensor");
 
 	ret = tsl2591_set_pm_runtime_busy(chip, true);
 
@@ -203,15 +309,22 @@ static int tsl2591_read_raw(struct iio_dev *indio_dev,
 
 	ret = -EINVAL;
 	switch (mask) {
-		case IIO_CHAN_INFO_RAW:
-			if (chan->type == IIO_LIGHT){
-				ret = tsl2591_get_lux_data(indio_dev);
-				if (ret < 0){
-					break;
-				}
-				*val = ret;
-				ret = IIO_VAL_INT;
+	case IIO_CHAN_INFO_RAW:
+		if (chan->type == IIO_LIGHT){
+			ret = tsl2591_get_lux_data(indio_dev);
+			if (ret < 0){
+				break;
 			}
+
+			if (chan->channel2 == IIO_MOD_LIGHT_BOTH)
+				*val = chip->als_readings.als_ch0;
+			else if (chan->channel2 == IIO_MOD_LIGHT_IR)
+				*val = chip->als_readings.als_ch1;
+			else
+				*val = 0;
+
+			ret = IIO_VAL_INT;
+		}
 			break;
 	}
 
@@ -254,8 +367,128 @@ static const struct iio_info tsl2591_info = {
 	.write_raw = tsl2591_write_raw, /* Writing a value to the device */
 };
 
-static int tsl2591_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int __maybe_unused tsl2591_suspend(struct device *dev)
+{
+	struct iio_dev *indio_dev = i2c_get_clientdata(to_i2c_client(dev));
+	struct tsl2591_chip *chip = iio_priv(indio_dev);
+	int ret;
+
+	mutex_lock(&chip->als_mutex);
+
+	dev_dbg(dev, "PM Suspending\n");
+	ret = tsl2591_set_power_state(chip, TSL2591_PWR_OFF);
+
+	mutex_unlock(&chip->als_mutex);
+
+	return ret;
+}
+
+static int __maybe_unused tsl2591_resume(struct device *dev)
+{
+	struct iio_dev *indio_dev = i2c_get_clientdata(to_i2c_client(dev));
+	struct tsl2591_chip *chip = iio_priv(indio_dev);
+	int ret;
+
+	mutex_lock(&chip->als_mutex);
+
+	dev_dbg(dev, "PM Resuming\n");
+	ret = tsl2591_set_power_state(chip, TSL2591_PWR_ON     |
+                                        TSL2591_ENABLE_ALS |
+                                        TSL2591_ENABLE_ALS_INT);
+
+	mutex_unlock(&chip->als_mutex);
+
+	return ret;
+}
+
+static const struct dev_pm_ops tsl2591_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
+				pm_runtime_force_resume)
+	SET_RUNTIME_PM_OPS(tsl2591_suspend, tsl2591_resume, NULL)
+};
+
+#ifdef CONFIG_OF
+static int tsl2591_probe_of(struct tsl2591_chip *chip)
+{
+	struct device *dev = &chip->client->dev;
+	struct device_node *np = dev->of_node;
+	int ret;
+	int i;
+
+	u32 als_integration_time;
+	u32 als_gain;
+
+	if (!np)
+		return -ENODEV;
+
+	dev_dbg(dev, "Probing device tree\n");
+
+	ret = of_property_read_u32(np, "als-integration-time", &als_integration_time);
+
+	if (ret) {
+		dev_warn(dev, "als-integration-time not defined. Setting default: %d\n",
+			DEFAULT_ALS_INTEGRATION_TIME);
+		chip->als_settings.als_int_time = DEFAULT_ALS_INTEGRATION_TIME;
+	} else {
+		for (i = 0; i < ARRAY_SIZE(tsl2591_integration_opts); ++i) {
+			if (tsl2591_integration_opts[i] == als_integration_time)
+			{
+				chip->als_settings.als_int_time = als_integration_time;
+				break;
+			}
+			if (i == (ARRAY_SIZE(tsl2591_integration_opts) - 1))
+			{
+				dev_warn(dev, "als-integration-time value incompatible. Setting default: %d\n",
+					DEFAULT_ALS_INTEGRATION_TIME);
+				chip->als_settings.als_int_time = DEFAULT_ALS_INTEGRATION_TIME;
+			}
+		}
+		dev_info(dev, "als-integration-time = %d\n", chip->als_settings.als_int_time);
+	}
+
+	ret = of_property_read_u32(np, "als-gain", &als_gain);
+
+	if (ret) {
+		dev_warn(dev, "als-gain not defined. Setting default: %d\n",
+			DEFAULT_ALS_GAIN);
+		chip->als_settings.als_int_time = DEFAULT_ALS_GAIN;
+	} else {
+		for (i = 0; i < ARRAY_SIZE(tsl2591_gain_opts); ++i) {
+			if (tsl2591_gain_opts[i] == als_gain)
+			{
+				chip->als_settings.als_gain = als_gain;
+				break;
+			}
+			if (i == (ARRAY_SIZE(tsl2591_gain_opts) - 1))
+			{
+				dev_warn(dev, "als-gain value incompatible. Setting default: %d\n",
+					DEFAULT_ALS_GAIN);
+				chip->als_settings.als_gain = DEFAULT_ALS_GAIN;
+			}
+		}
+		dev_info(dev, "als-gain = %d\n", chip->als_settings.als_gain);
+	}
+
+	return 0;
+}
+#else
+static int tsl2591_default_config(struct tsl2591_chip *chip)
+{
+	struct device *dev = &chip->client->dev;
+
+	dev_dbg(dev, "Loading default configuration\n");
+
+	chip->als_settings.als_int_time = DEFAULT_ALS_INTEGRATION_TIME;
+	chip->als_settings.als_int_time = DEFAULT_ALS_GAIN;
+
+	dev_dbg(dev, "als-integration-time = %d\n", chip->als_settings.als_int_time);
+	dev_dbg(dev, "als-gain = %d\n", chip->als_settings.als_gain);
+
+	return 0;
+}
+#endif
+
+static int tsl2591_probe(struct i2c_client *client)
 {
 	int ret = 0;
 	struct tsl2591_chip *chip;
@@ -284,6 +517,20 @@ static int tsl2591_probe(struct i2c_client *client,
 	chip = iio_priv(indio_dev);
 	chip->client = client;
 	i2c_set_clientdata(client, indio_dev);
+
+#ifdef CONFIG_OF
+	if (tsl2591_probe_of(chip))
+	{
+		dev_err(&client->dev, "No platform data\n");
+		return -ENODEV;
+	}
+#else
+	if (tsl2591_default_config(chip))
+	{
+		dev_err(&client->dev, "Failed to load default config\n");
+		return -EINVAL;
+	}
+#endif
 
 	mutex_init(&chip->als_mutex);
 
@@ -323,7 +570,10 @@ static int tsl2591_probe(struct i2c_client *client,
 		return ret;
 	}
 
-	/* Parse dt node - get default chip config */
+	if (tsl2591_als_calibrate(chip)) {
+		dev_err(&client->dev, "Failed to calibrate sensor\n");
+		return -EINVAL;
+	}
 
 	dev_info(&client->dev, "Probe complete - Light sensor found.\n");
 
@@ -346,50 +596,6 @@ static int tsl2591_remove(struct i2c_client *client)
 	return tsl2591_set_power_state(chip, TSL2591_PWR_OFF);
 }
 
-static int __maybe_unused tsl2591_suspend(struct device *dev)
-{
-	struct iio_dev *indio_dev = i2c_get_clientdata(to_i2c_client(dev));
-	struct tsl2591_chip *chip = iio_priv(indio_dev);
-	int ret;
-
-	mutex_lock(&chip->als_mutex);
-
-	printk("PM Suspending tsl2591.\n");
-	ret = tsl2591_set_power_state(chip, TSL2591_PWR_OFF);
-
-	mutex_unlock(&chip->als_mutex);
-
-	return ret;
-}
-
-static int __maybe_unused tsl2591_resume(struct device *dev)
-{
-	struct iio_dev *indio_dev = i2c_get_clientdata(to_i2c_client(dev));
-	struct tsl2591_chip *chip = iio_priv(indio_dev);
-	int ret;
-
-	mutex_lock(&chip->als_mutex);
-
-	printk("PM Resuming tsl2591.\n");
-	ret = tsl2591_set_power_state(chip, TSL2591_PWR_ON | TSL2591_ENABLE_ALS);
-
-	mutex_unlock(&chip->als_mutex);
-
-	return ret;
-}
-
-static const struct dev_pm_ops tsl2591_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
-				pm_runtime_force_resume)
-	SET_RUNTIME_PM_OPS(tsl2591_suspend, tsl2591_resume, NULL)
-};
-
-static const struct i2c_device_id tsl2591_id[] = {
-	{ "tsl2591", 0 },
-	{}
-};
-MODULE_DEVICE_TABLE(i2c, tsl2591_id);
-
 static const struct of_device_id tsl2591_of_match[] = {
 	{ .compatible = "amstaos,tsl2591", },
 	{},
@@ -401,10 +607,9 @@ static struct i2c_driver tsl2591_driver = {
 	.driver = {
 		.name = "tsl2591",
 		.pm = &tsl2591_pm_ops,
-		.of_match_table = tsl2591_of_match,
+		.of_match_table = of_match_ptr(tsl2591_of_match),
 	},
-	.id_table = tsl2591_id,
-	.probe = tsl2591_probe,
+	.probe_new = tsl2591_probe,
 	.remove = tsl2591_remove,
 };
 module_i2c_driver(tsl2591_driver);

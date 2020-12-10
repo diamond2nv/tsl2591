@@ -266,7 +266,46 @@ static int tsl2591_set_pm_runtime_busy(struct tsl2591_chip *chip, bool busy)
 	return ret;
 }
 
+static ssize_t in_illuminance_integration_time_show(struct device *dev,
+						struct device_attribute *attr,
+						char *buf)
+{
+	return 0;
+}
+
+static ssize_t in_illuminance_integration_time_store(struct device *dev,
+						 struct device_attribute *attr,
+						 const char *buf, size_t len)
+{
+	return 0;
+}
+
+static ssize_t in_illuminance_gain_show(struct device *dev,
+						struct device_attribute *attr,
+						char *buf)
+{
+	return 0;
+}
+
+static ssize_t in_illuminance_gain_store(struct device *dev,
+						 struct device_attribute *attr,
+						 const char *buf, size_t len)
+{
+	return 0;
+}
+
+static IIO_CONST_ATTR(in_illuminance_integration_time_available_ms,
+                     "100 200 300 400 500 600");
+static IIO_CONST_ATTR(in_illuminance_gain_available,
+                     "low med high max");
+static IIO_DEVICE_ATTR_RW(in_illuminance_integration_time, 0);
+static IIO_DEVICE_ATTR_RW(in_illuminance_gain, 0);
+
 static struct attribute *sysfs_attrs_ctrl[] = {
+	&iio_const_attr_in_illuminance_integration_time_available_ms.dev_attr.attr,
+	&iio_const_attr_in_illuminance_gain_available.dev_attr.attr,
+	&iio_dev_attr_in_illuminance_integration_time.dev_attr.attr,
+	&iio_dev_attr_in_illuminance_gain.dev_attr.attr,
 	NULL
 };
 
@@ -362,7 +401,7 @@ static int tsl2591_write_raw(struct iio_dev *indio_dev,
 }
 
 static const struct iio_info tsl2591_info = {
-	//.attrs = &tsl2591_attribute_group, /* General purpose device attributes */
+	.attrs = &tsl2591_attribute_group, /* General purpose device attributes */
 	.read_raw = tsl2591_read_raw, /* Requesting a value from the device */
 	.write_raw = tsl2591_write_raw, /* Writing a value to the device */
 };

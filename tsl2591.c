@@ -157,9 +157,9 @@ struct tsl2591_chip {
 	struct tsl2591_als_readings als_readings;
 };
 
-static char* tsl2591_gain_to_str(const u8 als_gain)
+static char *tsl2591_gain_to_str(const u8 als_gain)
 {
-	char* gain_str;
+	char *gain_str;
 
 	switch (als_gain) {
 	case TSL2591_CTRL_ALS_LOW_GAIN:
@@ -182,7 +182,7 @@ static char* tsl2591_gain_to_str(const u8 als_gain)
 	return gain_str;
 }
 
-static u8 tsl2591_gain_from_str(const char* als_gain_str)
+static u8 tsl2591_gain_from_str(const char *als_gain_str)
 {
 	if (strstr(als_gain_str, TSL2591_CTRL_ALS_LOW_GAIN_LIT) != NULL)
 		return TSL2591_CTRL_ALS_LOW_GAIN;
@@ -201,10 +201,10 @@ static int tsl2591_wait_adc_complete(struct tsl2591_chip *chip)
 	struct tsl2591_settings settings = chip->als_settings;
 	int delay = als_time_secs_to_ms(settings.als_int_time);
 
-	if (!delay){
+	if (!delay) {
 		delay = MAX_ALS_INTEGRATION_TIME_MS;
 		dev_warn(&chip->client->dev,
-	        "Failed to get int time, setting default delay: %d\n", delay);
+				"Failed to get int time, setting default delay: %d\n", delay);
 	}
 
 	msleep(delay);
@@ -222,9 +222,9 @@ static int tsl2591_get_lux_data(struct iio_dev *indio_dev)
 
 	tsl2591_wait_adc_complete(chip);
 
-	for (i = 0; i < NUMBER_OF_DATA_CHANNELS; ++i)
-	{
+	for (i = 0; i < NUMBER_OF_DATA_CHANNELS; ++i) {
 		int reg = TSL2591_CMD_NOP | tsl2591_data_channels[i];
+
 		ret = i2c_smbus_read_byte_data(client, TSL2591_CMD_NOP | reg);
 
 		if (ret < 0) {
@@ -352,7 +352,7 @@ static ssize_t in_illuminance_gain_show(struct device *dev,
 	struct tsl2591_chip *chip = iio_priv(indio_dev);
 	int ret;
 
-	char* gain = tsl2591_gain_to_str(chip->als_settings.als_gain);
+	char *gain = tsl2591_gain_to_str(chip->als_settings.als_gain);
 
 	mutex_lock(&chip->als_mutex);
 	ret = sprintf(buf, "%s\n", gain);
@@ -390,9 +390,9 @@ calibrate_error:
 }
 
 static IIO_CONST_ATTR(in_illuminance_integration_time_available_ms,
-                     "100 200 300 400 500 600");
+				"100 200 300 400 500 600");
 static IIO_CONST_ATTR(in_illuminance_gain_available,
-                     "low med high max");
+				"low med high max");
 static IIO_DEVICE_ATTR_RW(in_illuminance_integration_time, 0);
 static IIO_DEVICE_ATTR_RW(in_illuminance_gain, 0);
 
@@ -444,11 +444,10 @@ static int tsl2591_read_raw(struct iio_dev *indio_dev,
 	ret = -EINVAL;
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW:
-		if (chan->type == IIO_LIGHT){
+		if (chan->type == IIO_LIGHT) {
 			ret = tsl2591_get_lux_data(indio_dev);
-			if (ret < 0){
+			if (ret < 0)
 				break;
-			}
 
 			if (chan->channel2 == IIO_MOD_LIGHT_BOTH)
 				*val = chip->als_readings.als_ch0;
@@ -526,9 +525,9 @@ static int __maybe_unused tsl2591_resume(struct device *dev)
 	mutex_lock(&chip->als_mutex);
 
 	dev_dbg(dev, "PM Resuming\n");
-	ret = tsl2591_set_power_state(chip, TSL2591_PWR_ON     |
-                                        TSL2591_ENABLE_ALS |
-                                        TSL2591_ENABLE_ALS_INT);
+	ret = tsl2591_set_power_state(chip, TSL2591_PWR_ON |
+				TSL2591_ENABLE_ALS |
+				TSL2591_ENABLE_ALS_INT);
 
 	mutex_unlock(&chip->als_mutex);
 
@@ -565,13 +564,11 @@ static int tsl2591_probe_of(struct tsl2591_chip *chip)
 		chip->als_settings.als_int_time = DEFAULT_ALS_INTEGRATION_TIME;
 	} else {
 		for (i = 0; i < ARRAY_SIZE(tsl2591_integration_opts); ++i) {
-			if (tsl2591_integration_opts[i] == als_integration_time)
-			{
+			if (tsl2591_integration_opts[i] == als_integration_time) {
 				chip->als_settings.als_int_time = als_integration_time;
 				break;
 			}
-			if (i == (ARRAY_SIZE(tsl2591_integration_opts) - 1))
-			{
+			if (i == (ARRAY_SIZE(tsl2591_integration_opts) - 1)) {
 				dev_warn(dev, "als-integration-time value incompatible. Setting default: %d\n",
 					DEFAULT_ALS_INTEGRATION_TIME);
 				chip->als_settings.als_int_time = DEFAULT_ALS_INTEGRATION_TIME;
@@ -588,13 +585,11 @@ static int tsl2591_probe_of(struct tsl2591_chip *chip)
 		chip->als_settings.als_int_time = DEFAULT_ALS_GAIN;
 	} else {
 		for (i = 0; i < ARRAY_SIZE(tsl2591_gain_opts); ++i) {
-			if (tsl2591_gain_opts[i] == als_gain)
-			{
+			if (tsl2591_gain_opts[i] == als_gain) {
 				chip->als_settings.als_gain = als_gain;
 				break;
 			}
-			if (i == (ARRAY_SIZE(tsl2591_gain_opts) - 1))
-			{
+			if (i == (ARRAY_SIZE(tsl2591_gain_opts) - 1)) {
 				dev_warn(dev, "als-gain value incompatible. Setting default: %d\n",
 					DEFAULT_ALS_GAIN);
 				chip->als_settings.als_gain = DEFAULT_ALS_GAIN;
@@ -653,14 +648,12 @@ static int tsl2591_probe(struct i2c_client *client)
 	i2c_set_clientdata(client, indio_dev);
 
 #ifdef CONFIG_OF
-	if (tsl2591_probe_of(chip))
-	{
+	if (tsl2591_probe_of(chip)) {
 		dev_err(&client->dev, "No platform data\n");
 		return -ENODEV;
 	}
 #else
-	if (tsl2591_default_config(chip))
-	{
+	if (tsl2591_default_config(chip)) {
 		dev_err(&client->dev, "Failed to load default config\n");
 		return -EINVAL;
 	}

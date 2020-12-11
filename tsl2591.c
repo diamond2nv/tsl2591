@@ -18,6 +18,9 @@
 #include <linux/debugfs.h>
 #include <linux/delay.h>
 
+#define als_time_secs_to_ms(x) ((x + 1) * 100)
+#define als_time_ms_to_secs(x) ((x / 100) - 1)
+
 /* TSL2591 Register Set */
 #define TSL2591_ENABLE      0x00
 #define TSL2591_CONTROL     0x01
@@ -104,8 +107,15 @@
 
 /* TSL2591 Default Values */
 #define DEFAULT_ALS_INTEGRATION_TIME    TSL2591_CTRL_ALS_INTEGRATION_300MS
+#define MAX_ALS_INTEGRATION_TIME_MS     600
 #define DEFAULT_ALS_GAIN                TSL2591_CTRL_ALS_MED_GAIN
 #define NUMBER_OF_DATA_CHANNELS         4
+
+/* Literals */
+#define TSL2591_CTRL_ALS_LOW_GAIN_LIT   "low"
+#define TSL2591_CTRL_ALS_MED_GAIN_LIT   "med"
+#define TSL2591_CTRL_ALS_HIGH_GAIN_LIT  "high"
+#define TSL2591_CTRL_ALS_MAX_GAIN_LIT   "max"
 
 static const u32 tsl2591_integration_opts[] = {
 	TSL2591_CTRL_ALS_INTEGRATION_100MS,
@@ -147,33 +157,54 @@ struct tsl2591_chip {
 	struct tsl2591_als_readings als_readings;
 };
 
+static char* tsl2591_gain_to_str(const u8 als_gain)
+{
+	char* gain_str;
+
+	switch (als_gain) {
+	case TSL2591_CTRL_ALS_LOW_GAIN:
+		gain_str = TSL2591_CTRL_ALS_LOW_GAIN_LIT;
+		break;
+	case TSL2591_CTRL_ALS_MED_GAIN:
+		gain_str = TSL2591_CTRL_ALS_MED_GAIN_LIT;
+		break;
+	case TSL2591_CTRL_ALS_HIGH_GAIN:
+		gain_str = TSL2591_CTRL_ALS_HIGH_GAIN_LIT;
+		break;
+	case TSL2591_CTRL_ALS_MAX_GAIN:
+		gain_str = TSL2591_CTRL_ALS_MAX_GAIN_LIT;
+		break;
+	default:
+		gain_str = "error";
+		break;
+	}
+
+	return gain_str;
+}
+
+static u8 tsl2591_gain_from_str(const char* als_gain_str)
+{
+	if (strstr(als_gain_str, TSL2591_CTRL_ALS_LOW_GAIN_LIT) != NULL)
+		return TSL2591_CTRL_ALS_LOW_GAIN;
+	else if (strstr(als_gain_str, TSL2591_CTRL_ALS_MED_GAIN_LIT) != NULL)
+		return TSL2591_CTRL_ALS_MED_GAIN;
+	else if (strstr(als_gain_str, TSL2591_CTRL_ALS_HIGH_GAIN_LIT) != NULL)
+		return TSL2591_CTRL_ALS_HIGH_GAIN;
+	else if (strstr(als_gain_str, TSL2591_CTRL_ALS_MAX_GAIN_LIT) != NULL)
+		return TSL2591_CTRL_ALS_MAX_GAIN;
+	else
+		return 0;
+}
+
 static int tsl2591_wait_adc_complete(struct tsl2591_chip *chip)
 {
 	struct tsl2591_settings settings = chip->als_settings;
-	int delay;
+	int delay = als_time_secs_to_ms(settings.als_int_time);
 
-	switch (settings.als_int_time)
-	{
-		case TSL2591_CTRL_ALS_INTEGRATION_100MS:
-			delay = 100;
-			break;
-		case TSL2591_CTRL_ALS_INTEGRATION_200MS:
-			delay = 200;
-			break;
-		case TSL2591_CTRL_ALS_INTEGRATION_300MS:
-			delay = 300;
-			break;
-		case TSL2591_CTRL_ALS_INTEGRATION_400MS:
-			delay = 400;
-			break;
-		case TSL2591_CTRL_ALS_INTEGRATION_500MS:
-			delay = 500;
-			break;
-		case TSL2591_CTRL_ALS_INTEGRATION_600MS:
-			delay = 600;
-			break;
-		default:
-			delay = 600;
+	if (!delay){
+		delay = MAX_ALS_INTEGRATION_TIME_MS;
+		dev_warn(&chip->client->dev,
+	        "Failed to get int time, setting default delay: %d\n", delay);
 	}
 
 	msleep(delay);
@@ -270,28 +301,92 @@ static ssize_t in_illuminance_integration_time_show(struct device *dev,
 						struct device_attribute *attr,
 						char *buf)
 {
-	return 0;
+	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct tsl2591_chip *chip = iio_priv(indio_dev);
+	int ret;
+
+	int als_int_time = als_time_secs_to_ms(chip->als_settings.als_int_time);
+
+	mutex_lock(&chip->als_mutex);
+	ret = sprintf(buf, "%d\n", als_int_time);
+	mutex_unlock(&chip->als_mutex);
+
+	return ret;
 }
 
 static ssize_t in_illuminance_integration_time_store(struct device *dev,
 						 struct device_attribute *attr,
 						 const char *buf, size_t len)
 {
-	return 0;
+	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct tsl2591_chip *chip = iio_priv(indio_dev);
+	struct i2c_client *client = chip->client;
+
+	int value;
+
+	if (kstrtoint(buf, 0, &value) || !value)
+		return -EINVAL;
+
+	mutex_lock(&chip->als_mutex);
+	chip->als_settings.als_int_time = als_time_ms_to_secs(value);
+
+	if (tsl2591_als_calibrate(chip)) {
+		dev_err(&client->dev, "Failed to calibrate sensor\n");
+		goto calibrate_error;
+	}
+
+	mutex_unlock(&chip->als_mutex);
+
+	return len;
+
+calibrate_error:
+	mutex_unlock(&chip->als_mutex);
+	return -EINVAL;
 }
 
 static ssize_t in_illuminance_gain_show(struct device *dev,
 						struct device_attribute *attr,
 						char *buf)
 {
-	return 0;
+	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct tsl2591_chip *chip = iio_priv(indio_dev);
+	int ret;
+
+	char* gain = tsl2591_gain_to_str(chip->als_settings.als_gain);
+
+	mutex_lock(&chip->als_mutex);
+	ret = sprintf(buf, "%s\n", gain);
+	mutex_unlock(&chip->als_mutex);
+
+	return ret;
 }
 
 static ssize_t in_illuminance_gain_store(struct device *dev,
 						 struct device_attribute *attr,
 						 const char *buf, size_t len)
 {
-	return 0;
+	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct tsl2591_chip *chip = iio_priv(indio_dev);
+	struct i2c_client *client = chip->client;
+
+	if (!buf)
+		return -EINVAL;
+
+	mutex_lock(&chip->als_mutex);
+	chip->als_settings.als_gain = tsl2591_gain_from_str(buf);
+
+	if (tsl2591_als_calibrate(chip)) {
+		dev_err(&client->dev, "Failed to calibrate sensor\n");
+		goto calibrate_error;
+	}
+
+	mutex_unlock(&chip->als_mutex);
+
+	return len;
+
+calibrate_error:
+	mutex_unlock(&chip->als_mutex);
+	return -EINVAL;
 }
 
 static IIO_CONST_ATTR(in_illuminance_integration_time_available_ms,

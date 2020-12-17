@@ -100,8 +100,7 @@
 #define TSL2591_STS_ALS_VALID   0x01
 #define TSL2591_STS_ALS_INT     0x10
 #define TSL2591_STS_NPERS_INT   0x20
-
-#define TSL2591_STS_VAL_HIGH 0x01
+#define TSL2591_STS_VAL_HIGH    0x01
 
 /* TSL2591 Constant Values */
 #define TSL2591_PACKAGE_ID_VAL  0x00
@@ -120,6 +119,7 @@
 
 #define ALS_MIN_VALUE	0
 #define ALS_MAX_VALUE	65535
+#define ALS_STS_VALID_COUNT 10
 
 /* Literals */
 #define TSL2591_CTRL_ALS_LOW_GAIN_LIT   "low"
@@ -282,6 +282,7 @@ static int tsl2591_wait_adc_complete(struct tsl2591_chip *chip)
 	struct tsl2591_settings settings = chip->als_settings;
 	int delay = als_time_secs_to_ms(settings.als_int_time);
 	int ret;
+	int i;
 
 	if (!delay) {
 		delay = MAX_ALS_INTEGRATION_TIME_MS;
@@ -297,16 +298,24 @@ static int tsl2591_wait_adc_complete(struct tsl2591_chip *chip)
 	 */
 	msleep(delay);
 
-	ret = i2c_smbus_read_byte_data(client, TSL2591_CMD_NOP |
-					TSL2591_STATUS);
+	/* Check for status als valid flag for up to 100ms */
+	for (i = 0; i < ALS_STS_VALID_COUNT; ++i) {
+		ret = i2c_smbus_read_byte_data(client, TSL2591_CMD_NOP |
+			TSL2591_STATUS);
 
-	if (ret < 0) {
-		dev_err(&client->dev, "%s:failed to read register\n", __func__);
-		return -EINVAL;
+		if (ret < 0) {
+			dev_err(&client->dev, "%s:failed to read register\n", __func__);
+			return -EINVAL;
+		}
+
+		if ((ret & TSL2591_STS_ALS_VALID) == TSL2591_STS_VAL_HIGH)
+			break;
+
+		if (i == (ALS_STS_VALID_COUNT - 1))
+			return -ENODATA;
+
+		usleep_range(9000, 10000);
 	}
-
-	if ((ret & TSL2591_STS_ALS_VALID) != TSL2591_STS_VAL_HIGH)
-		return -ENODATA;
 
 	return 0;
 }
@@ -350,7 +359,7 @@ static int tsl2591_get_lux_data(struct iio_dev *indio_dev)
 
 		if (ret < 0) {
 			dev_err(&client->dev,
-				"%s: failed to read register %x\n",
+				"%s: failed to read register %#04x\n",
 				__func__, reg);
 			return -EINVAL;
 		}
@@ -378,9 +387,13 @@ static int tsl2591_get_lux_data(struct iio_dev *indio_dev)
 		tsl2591_gain_to_again(settings->als_gain)) /
 		TSL2591_LUX_COEFFICIENT;
 
+	dev_dbg(&client->dev, "Counts Per Lux (CPL): %d\n", counts_per_lux);
+
 	lux = ((chip->als_readings.als_ch0 - chip->als_readings.als_ch1) *
 	(1 - (chip->als_readings.als_ch1 / chip->als_readings.als_ch0))) /
 	counts_per_lux;
+
+	dev_dbg(&client->dev, "Lux value: %d\n", lux);
 
 	return lux;
 }
@@ -393,9 +406,9 @@ static int tsl2591_als_calibrate(struct tsl2591_chip *chip)
 
 	u8 configuration;
 
-	dev_info(&client->dev, "Setting configuration - als_int_time: %x\n",
+	dev_info(&client->dev, "Setting configuration - als_int_time: %#04x\n",
 				als_settings.als_int_time);
-	dev_info(&client->dev, "Setting configuration - als_gain: %x\n",
+	dev_info(&client->dev, "Setting configuration - als_gain: %#04x\n",
 				als_settings.als_gain);
 
 	configuration = als_settings.als_int_time | als_settings.als_gain;
@@ -404,7 +417,7 @@ static int tsl2591_als_calibrate(struct tsl2591_chip *chip)
 		TSL2591_CMD_NOP | TSL2591_CONTROL, configuration);
 	if (ret < 0)
 		dev_err(&client->dev,
-			"%s: failed to set configuration to %x\n", __func__,
+			"%s: failed to set configuration to %#04x\n", __func__,
 			configuration);
 
 	return ret;
@@ -433,13 +446,13 @@ static int tsl2591_als_thresholds(struct tsl2591_chip *chip)
 	u8 als_upper_l = (als_settings.als_upper_threshold & 0x00FF);
 	u8 als_upper_h = ((als_settings.als_upper_threshold >> 8) & 0x00FF);
 
-	dev_info(&client->dev, "Setting configuration - als lower l: %x\n",
+	dev_info(&client->dev, "Setting configuration - als lower l: %#04x\n",
 				als_lower_l);
-	dev_info(&client->dev, "Setting configuration - als lower h: %x\n",
+	dev_info(&client->dev, "Setting configuration - als lower h: %#04x\n",
 				als_lower_h);
-	dev_info(&client->dev, "Setting configuration - als upper l: %x\n",
+	dev_info(&client->dev, "Setting configuration - als upper l: %#04x\n",
 				als_upper_l);
-	dev_info(&client->dev, "Setting configuration - als upper h: %x\n",
+	dev_info(&client->dev, "Setting configuration - als upper h: %#04x\n",
 				als_upper_h);
 
 	ret = i2c_smbus_write_byte_data(client, TSL2591_CMD_NOP |
@@ -490,7 +503,7 @@ static int tsl2591_set_power_state(struct tsl2591_chip *chip, u8 state)
 					TSL2591_ENABLE, state);
 	if (ret < 0)
 		dev_err(&client->dev,
-			"%s: failed to set the power state to %x\n", __func__,
+			"%s: failed to set the power state to %#04x\n", __func__,
 			state);
 
 	return ret;
@@ -764,7 +777,8 @@ static int __maybe_unused tsl2591_resume(struct device *dev)
 	dev_dbg(dev, "PM Resuming\n");
 	ret = tsl2591_set_power_state(chip, TSL2591_PWR_ON |
 				TSL2591_ENABLE_ALS |
-				TSL2591_ENABLE_ALS_INT);
+				TSL2591_ENABLE_ALS_INT |
+				TSL2591_ENABLE_NP_INT);
 
 	mutex_unlock(&chip->als_mutex);
 
@@ -786,6 +800,8 @@ static irqreturn_t tsl2591_irq_handler(int irq, void *private)
 
 	int ret;
 
+	dev_info(&client->dev, "Interrupt received\n");
+
 	ret = i2c_smbus_read_byte_data(client,
 		TSL2591_CMD_NOP | TSL2591_STATUS);
 
@@ -795,6 +811,7 @@ static irqreturn_t tsl2591_irq_handler(int irq, void *private)
 	}
 
 	if ((ret & TSL2591_STS_ALS_INT) == TSL2591_STS_VAL_HIGH) {
+		dev_info(&client->dev, "Interrupt status valid, sending event\n");
 		iio_push_event(dev_info,
 				IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0,
 				IIO_EV_TYPE_THRESH,
@@ -837,14 +854,14 @@ static int tsl2591_probe_of(struct tsl2591_chip *chip)
 			chip->als_settings.als_int_time
 				= DEFAULT_ALS_INTEGRATION_TIME;
 		}
-		dev_info(dev, "als-integration-time = %d\n",
+		dev_info(dev, "als-integration-time = %#04x\n",
 			chip->als_settings.als_int_time);
 	}
 
 	ret = of_property_read_u32(np, "als-gain", &als_gain);
 
 	if (ret) {
-		dev_warn(dev, "als-gain not defined. Setting default: %d\n",
+		dev_warn(dev, "als-gain not defined. Setting default: %#04x\n",
 			DEFAULT_ALS_GAIN);
 		chip->als_settings.als_int_time = DEFAULT_ALS_GAIN;
 	} else {
@@ -852,7 +869,8 @@ static int tsl2591_probe_of(struct tsl2591_chip *chip)
 			dev_warn(dev, "setting default als-gain\n");
 			chip->als_settings.als_gain = DEFAULT_ALS_GAIN;
 		}
-		dev_info(dev, "als-gain = %d\n", chip->als_settings.als_gain);
+		dev_info(dev, "als-gain = %#04x\n",
+			chip->als_settings.als_gain);
 	}
 
 	ret = of_property_read_u32(np, "als-lower-threshold",
@@ -868,6 +886,8 @@ static int tsl2591_probe_of(struct tsl2591_chip *chip)
 			dev_warn(dev, "setting default als-lower-threshold\n");
 			chip->als_settings.als_lower_threshold
 				= DEFAULT_ALS_LOWER_THRESHOLD;
+		} else {
+			chip->als_settings.als_lower_threshold = als_lower_threshold;
 		}
 		dev_info(dev, "als-lower-threshold = %d\n",
 			chip->als_settings.als_lower_threshold);
@@ -886,6 +906,8 @@ static int tsl2591_probe_of(struct tsl2591_chip *chip)
 			dev_warn(dev, "setting default als-upper-threshold\n");
 			chip->als_settings.als_upper_threshold
 				= DEFAULT_ALS_UPPER_THRESHOLD;
+		} else {
+			chip->als_settings.als_upper_threshold = als_upper_threshold;
 		}
 		dev_info(dev, "als-upper-threshold = %d\n",
 			chip->als_settings.als_upper_threshold);
@@ -953,9 +975,10 @@ static int tsl2591_probe(struct i2c_client *client)
 #endif
 
 	if (client->irq) {
+		dev_info(&client->dev, "Registering interrupt\n");
 		ret = devm_request_threaded_irq(&client->dev, client->irq,
 				NULL, tsl2591_irq_handler,
-				IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
+				IRQF_TRIGGER_RISING | IRQF_ONESHOT,
 				"tsl2591_irq", indio_dev);
 		if (ret) {
 			dev_err(&client->dev, "irq request error %d\n", -ret);
@@ -976,7 +999,7 @@ static int tsl2591_probe(struct i2c_client *client)
 	}
 
 	if ((ret & TSL2591_DEVICE_ID_MASK) != TSL2591_DEVICE_ID_VAL) {
-		dev_err(&client->dev, "%s: received an unknown device ID %x\n",
+		dev_err(&client->dev, "%s: received an unknown device ID %#04x\n",
 			__func__, ret);
 		return -EINVAL;
 	}

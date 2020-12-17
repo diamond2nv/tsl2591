@@ -15,8 +15,14 @@
           #address-cells = <1>;
           #size-cells = <0>;
           reg = <0x29>;
+
+	  interrupt-parent = <&gpio0>;
+          interrupts = <20 2>;
+
           als-integration-time = <0x03>;
           als-gain = <0x10>;
+          als-lower-threshold = <100>;
+          als-upper-threshold = <1000>;
       };
     };
   };

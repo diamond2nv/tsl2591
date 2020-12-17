@@ -124,6 +124,8 @@ Status reg masks;
 
 Refer to this repo for configuration process and read/write: https://github.com/adafruit/Adafruit_TSL2591_Library
 
+****************************
+
 FLOW OF CONTROL (SETUP);
 1. Read DEVICE_ID (CMD_BIT | DEVICE_ID)
 2. Enable device and device interrupt (CMD_BIT | REG_ENABLE, POWER_ON | ALS_ENABLE | ALS_INT_ENABLE | ALS_NO_PERSIST_INT_ENABLE)
@@ -132,6 +134,57 @@ FLOW OF CONTROL (SETUP);
 FLOW OF CONTROL (READING);
 1. Enable device
 2. Wait integration time for ADC to complete e.g. 100ms
+2.b. Call get status and check for AVALID
 3. Read IR + Visible (Combined) -> Read channel 0 (CMD_BIT | CHAN0_LOW) and (CMD_BIT | CHAN0_HIGH)
 4. Read IR -> Read channel 1 (CMD_BIT | CHAN1_LOW) and (CMD_BIT | CHAN1_HIGH)
 5. Read Visible -> Read channel 0 and channel 1 -> Do channel 0 - channel 1 (Combined - IR)
+
+****************************
+
+FLOW OF CONTROL (Interrupt driven - setup);
+1. Read DEVICE_ID (CMD_BIT | DEVICE_ID)
+2. Enable device and device interrupt (CMD_BIT | REG_ENABLE, POWER_ON | ALS_ENABLE | ALS_INT_ENABLE | ALS_NO_PERSIST_INT_ENABLE)
+3. Set timing and gain (CMD_BIT | REG_CONTROL, DEFAULT_100MS_INT, DEFAULT_MED_GAIN)
+4. Clear interrupt (SPECIAL FUNCTION | CLEAR ALS AND NO PERSIST ALS INTERRUPT )
+5. Register interrupt - Lower, upper threshold and persist any (ALS thresholds and APERS)
+
+
+FLOW OF CONTROL (Interrupt driven - reading);
+
+****************************
+1. Enable device
+2. Wait integration time for ADC to complete e.g. 100ms
+3. Read IR + Visible (Combined) -> Read channel 0 (CMD_BIT | CHAN0_LOW) and (CMD_BIT | CHAN0_HIGH)
+4. Read IR -> Read channel 1 (CMD_BIT | CHAN1_LOW) and (CMD_BIT | CHAN1_HIGH)
+5. Read Visible -> Read channel 0 and channel 1 -> Do channel 0 - channel 1 (Combined - IR)
+6. Can call status register to check status and see if interrupt was fired. IRQ vs POLL
+
+
+TSL2772 Lux calculation;
+-------------------------
+AGAIN = 1, 8, 16, 120
+ATIME = 256 - Integration time / 2.73ms
+e.g. time = 101ms
+e.g. 256 - 101 / 2.73 = 57
+
+CPL = (ATIME_ms * AGAINx) / (GA * 60)
+Lux1 = (1 * C0DATA - 1.87 * C1DATA) / CPL
+Lux2 = (0.63 * C0DATA - 1 * C1DATA) / CPL
+Lux = MAX of Lux1, Lux2 or 0
+
+TSL2591 Lux calculation (based on Adafruit app);
+------------------------------------------------
+AGAIN = 1, 25, 428, 9876
+ATIME = 100, 200, 300, 400, 500, 600
+
+CPL = (ATIME_ms * AGAINx) / LUX DF (408 -> Lux coefficient)
+Lux1 = (C0DATA - 1.64 * C1DATA) / CPL
+Lux2 = (0.59 * C0DATA - 0.86 * C1DATA) / CPL
+Lux = MAX of Lux1, Lux2 or 0
+
+Alternate;
+lux = ((C0DATA - C1DATA) * (1 - (C1DATA / C0DATA))) / CPL
+e.g. AGAIN = 8, ATIME = 200, C0DATA = 1000, C1DATA = 50
+CPL = (200 * 8) / 408 = 4
+lux = ((1000 - 50) * (1 - (50 / 1000))) / 4 = 226
+lux = ((65535 - 65535) * (1 - (65535 / 65535))) / 4 = 226

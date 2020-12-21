@@ -329,6 +329,9 @@ static int tsl2591_wait_adc_complete(struct tsl2591_chip *chip)
  * Counts Per Lux (CPL) = (ATIME_ms * AGAIN) / LUX DF
  * lux = ((C0DATA - C1DATA) * (1 - (C1DATA / C0DATA))) / CPL
  *
+ * Scale values to get more representative value of lux i.e.
+ * lux = ((C0DATA - C1DATA) * (1000 - ((C1DATA * 1000) / C0DATA))) / CPL
+ *
  * Channel 0 = IR + Visible
  * Channel 1 = IR only
  * Visible = Channel 0 - Channel 1
@@ -371,6 +374,8 @@ static int tsl2591_get_lux_data(struct iio_dev *indio_dev)
 	chip->als_readings.als_ch1 =
 		le16_to_cpup((const __le16 *)&channel_data[2]);
 
+	dev_dbg(&client->dev, "both: %d\n", chip->als_readings.als_ch0);
+	dev_dbg(&client->dev, "ir: %d\n", chip->als_readings.als_ch1);
 
 	chip->als_readings.als_visible =
 		chip->als_readings.als_ch0 - chip->als_readings.als_ch1;
@@ -382,18 +387,22 @@ static int tsl2591_get_lux_data(struct iio_dev *indio_dev)
 		return ALS_MAX_VALUE;
 	}
 
-	/* Calculate lux value */
+	/* Calculate counts per lux value */
 	counts_per_lux = (als_time_secs_to_ms(settings->als_int_time) *
 		tsl2591_gain_to_again(settings->als_gain)) /
 		TSL2591_LUX_COEFFICIENT;
 
 	dev_dbg(&client->dev, "Counts Per Lux (CPL): %d\n", counts_per_lux);
 
+	/* Calculate lux value */
 	lux = ((chip->als_readings.als_ch0 - chip->als_readings.als_ch1) *
-	(1 - (chip->als_readings.als_ch1 / chip->als_readings.als_ch0))) /
-	counts_per_lux;
+	(1000 - ((chip->als_readings.als_ch1 * 1000) /
+	chip->als_readings.als_ch0))) / counts_per_lux;
 
-	dev_dbg(&client->dev, "Lux value: %d\n", lux);
+	/* Divide by 1000 to get real lux value before scaling */
+	lux = DIV_ROUND_CLOSEST(lux, 1000);
+
+	dev_dbg(&client->dev, "Lux Value: %d\n", lux);
 
 	return lux;
 }

@@ -163,6 +163,8 @@ struct tsl2591_als_readings {
 	u16 als_ch0;
 	u16 als_ch1;
 	u16 als_visible;
+	u16 als_lux_int;
+	u16 als_lux_decimal;
 };
 
 struct tsl2591_settings {
@@ -352,7 +354,7 @@ static int tsl2591_get_lux_data(struct iio_dev *indio_dev)
 	ret = tsl2591_wait_adc_complete(chip);
 	if (ret < 0) {
 		dev_warn(&client->dev, "No data available. Err: %d\n", ret);
-		return 0;
+		return -ENODATA;
 	}
 
 	for (i = 0; i < NUMBER_OF_DATA_CHANNELS; ++i) {
@@ -380,13 +382,6 @@ static int tsl2591_get_lux_data(struct iio_dev *indio_dev)
 	chip->als_readings.als_visible =
 		chip->als_readings.als_ch0 - chip->als_readings.als_ch1;
 
-	if ((chip->als_readings.als_ch0 == ALS_MAX_VALUE) ||
-		(chip->als_readings.als_ch1 == ALS_MAX_VALUE)) {
-		dev_warn(&client->dev,
-			"ALS saturation detected. Returning max ALS\n");
-		return ALS_MAX_VALUE;
-	}
-
 	/* Calculate counts per lux value */
 	counts_per_lux = (als_time_secs_to_ms(settings->als_int_time) *
 		tsl2591_gain_to_again(settings->als_gain)) /
@@ -400,11 +395,19 @@ static int tsl2591_get_lux_data(struct iio_dev *indio_dev)
 	chip->als_readings.als_ch0))) / counts_per_lux;
 
 	/* Divide by 1000 to get real lux value before scaling */
-	lux = DIV_ROUND_CLOSEST(lux, 1000);
+	chip->als_readings.als_lux_int = lux / 1000;
 
-	dev_dbg(&client->dev, "Lux Value: %d\n", lux);
+	/* Get the decimal part of lux reading */
+	chip->als_readings.als_lux_decimal =
+		(lux - (chip->als_readings.als_lux_int * 1000));
 
-	return lux;
+	dev_dbg(&client->dev, "Raw lux calculation: %d\n", lux);
+
+	dev_dbg(&client->dev, "Lux Value: %d.%d\n",
+		chip->als_readings.als_lux_int,
+		chip->als_readings.als_lux_decimal);
+
+	return ret;
 }
 
 static int tsl2591_als_calibrate(struct tsl2591_chip *chip)
@@ -466,7 +469,7 @@ static int tsl2591_als_thresholds(struct tsl2591_chip *chip)
 
 	ret = i2c_smbus_write_byte_data(client, TSL2591_CMD_NOP |
 		TSL2591_PERSIST,
-		TSL2591_PRST_ALS_INT_CYCLE_ANY);
+		TSL2591_PRST_ALS_INT_CYCLE_2);
 
 	if (ret < 0)
 		dev_err(&client->dev,
@@ -520,18 +523,25 @@ static int tsl2591_set_power_state(struct tsl2591_chip *chip, u8 state)
 
 static int tsl2591_set_pm_runtime_busy(struct tsl2591_chip *chip, bool busy)
 {
+	struct i2c_client *client = chip->client;
 	int ret;
 
-	if (busy) {
-		ret = pm_runtime_get_sync(&chip->client->dev);
-		if (ret < 0)
-			pm_runtime_put_noidle(&chip->client->dev);
-	} else {
-		pm_runtime_mark_last_busy(&chip->client->dev);
-		ret = pm_runtime_put_autosuspend(&chip->client->dev);
+	if (!client->irq) {
+		if (busy) {
+			ret = pm_runtime_get_sync(&chip->client->dev);
+			if (ret < 0)
+				pm_runtime_put_noidle(&chip->client->dev);
+		} else {
+			pm_runtime_mark_last_busy(&chip->client->dev);
+			ret = pm_runtime_put_autosuspend(&chip->client->dev);
+		}
+
+		return ret;
 	}
 
-	return ret;
+	dev_dbg(&client->dev, "irq enabled, skipping pm runtime\n");
+
+	return 0;
 }
 
 static ssize_t in_illuminance_integration_time_show(struct device *dev,
@@ -714,8 +724,9 @@ static int tsl2591_read_raw(struct iio_dev *indio_dev,
 			ret = tsl2591_get_lux_data(indio_dev);
 			if (ret < 0)
 				break;
-			*val = ret;
-			ret = IIO_VAL_INT;
+			*val = chip->als_readings.als_lux_int;
+			*val2 = (chip->als_readings.als_lux_decimal * 1000);
+			ret = IIO_VAL_INT_PLUS_MICRO;
 		}
 		break;
 	}
@@ -729,34 +740,9 @@ static int tsl2591_read_raw(struct iio_dev *indio_dev,
 	return ret;
 }
 
-static int tsl2591_write_raw(struct iio_dev *indio_dev,
-			     struct iio_chan_spec const *chan,
-			     int val, int val2, long mask)
-{
-	struct tsl2591_chip *chip = iio_priv(indio_dev);
-	int ret;
-
-	ret = tsl2591_set_pm_runtime_busy(chip, true);
-	if (ret < 0)
-		return ret;
-
-	mutex_lock(&chip->als_mutex);
-
-	printk("Writing value to device.\n");
-
-	mutex_unlock(&chip->als_mutex);
-
-	ret = tsl2591_set_pm_runtime_busy(chip, false);
-	if (ret < 0)
-		return ret;
-
-	return 0;
-}
-
 static const struct iio_info tsl2591_info = {
 	.attrs = &tsl2591_attribute_group,
 	.read_raw = tsl2591_read_raw,
-	.write_raw = tsl2591_write_raw,
 };
 
 static int __maybe_unused tsl2591_suspend(struct device *dev)
@@ -786,8 +772,7 @@ static int __maybe_unused tsl2591_resume(struct device *dev)
 	dev_dbg(dev, "PM Resuming\n");
 	ret = tsl2591_set_power_state(chip, TSL2591_PWR_ON |
 				TSL2591_ENABLE_ALS |
-				TSL2591_ENABLE_ALS_INT |
-				TSL2591_ENABLE_NP_INT);
+				TSL2591_ENABLE_ALS_INT);
 
 	mutex_unlock(&chip->als_mutex);
 
@@ -807,26 +792,12 @@ static irqreturn_t tsl2591_irq_handler(int irq, void *private)
 	struct i2c_client *client = chip->client;
 	s64 timestamp = iio_get_time_ns(dev_info);
 
-	int ret;
-
-	dev_info(&client->dev, "Interrupt received\n");
-
-	ret = i2c_smbus_read_byte_data(client,
-		TSL2591_CMD_NOP | TSL2591_STATUS);
-
-	if (ret < 0) {
-		dev_err(&client->dev, "%s: failed to read reg\n", __func__);
-		return IRQ_HANDLED;
-	}
-
-	if ((ret & TSL2591_STS_ALS_INT) == TSL2591_STS_VAL_HIGH) {
-		dev_info(&client->dev, "Interrupt status valid, sending event\n");
-		iio_push_event(dev_info,
-				IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0,
-				IIO_EV_TYPE_THRESH,
-				IIO_EV_DIR_EITHER),
-				timestamp);
-	}
+	dev_info(&client->dev, "Interrupt received, sending event\n");
+	iio_push_event(dev_info,
+			IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0,
+			IIO_EV_TYPE_THRESH,
+			IIO_EV_DIR_EITHER),
+			timestamp);
 
 	tsl2591_clear_als_irq(chip);
 
@@ -987,7 +958,7 @@ static int tsl2591_probe(struct i2c_client *client)
 		dev_info(&client->dev, "Registering interrupt\n");
 		ret = devm_request_threaded_irq(&client->dev, client->irq,
 				NULL, tsl2591_irq_handler,
-				IRQF_TRIGGER_RISING | IRQF_ONESHOT,
+				IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
 				"tsl2591_irq", indio_dev);
 		if (ret) {
 			dev_err(&client->dev, "irq request error %d\n", -ret);
@@ -1023,6 +994,17 @@ static int tsl2591_probe(struct i2c_client *client)
 	pm_runtime_set_autosuspend_delay(&client->dev,
 					 TSL2591_POWER_OFF_DELAY_MS);
 	pm_runtime_use_autosuspend(&client->dev);
+
+	/*
+	 * Power device on from probe to allow als cycles to
+	 * generate interrupts when intensity is out of bounds.
+	 * When interrupts are not enabled, device only needs to be
+	 * powered on when reading
+	 */
+	if (client->irq) {
+		tsl2591_resume(&client->dev);
+		pm_runtime_set_active(&client->dev);
+	}
 
 	ret = devm_iio_device_register(&client->dev, indio_dev);
 

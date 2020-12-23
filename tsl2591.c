@@ -114,6 +114,7 @@
 #define MAX_ALS_INTEGRATION_TIME_MS     600
 #define DEFAULT_ALS_GAIN                TSL2591_CTRL_ALS_MED_GAIN
 #define NUMBER_OF_DATA_CHANNELS         4
+#define DEFAULT_ALS_PERSIST             TSL2591_PRST_ALS_INT_CYCLE_ANY
 #define DEFAULT_ALS_LOWER_THRESHOLD	100
 #define DEFAULT_ALS_UPPER_THRESHOLD	1500
 
@@ -136,22 +137,6 @@
 #define TSL2591_CTRL_ALS_MAX_AGAIN   9876
 #define TSL2591_LUX_COEFFICIENT      408
 
-static const u32 tsl2591_integration_opts[] = {
-	TSL2591_CTRL_ALS_INTEGRATION_100MS,
-	TSL2591_CTRL_ALS_INTEGRATION_200MS,
-	TSL2591_CTRL_ALS_INTEGRATION_300MS,
-	TSL2591_CTRL_ALS_INTEGRATION_400MS,
-	TSL2591_CTRL_ALS_INTEGRATION_500MS,
-	TSL2591_CTRL_ALS_INTEGRATION_600MS,
-};
-
-static const u32 tsl2591_gain_opts[] = {
-	TSL2591_CTRL_ALS_LOW_GAIN,
-	TSL2591_CTRL_ALS_MED_GAIN,
-	TSL2591_CTRL_ALS_HIGH_GAIN,
-	TSL2591_CTRL_ALS_MAX_GAIN,
-};
-
 static const u8 tsl2591_data_channels[] = {
 	TSL2591_C0_DATAL,
 	TSL2591_C0_DATAH,
@@ -170,6 +155,7 @@ struct tsl2591_als_readings {
 struct tsl2591_settings {
 	u8 als_int_time;
 	u8 als_gain;
+	u8 als_persist;
 	u16 als_lower_threshold;
 	u16 als_upper_threshold;
 };
@@ -248,34 +234,66 @@ static int tsl2591_gain_from_str(const char *als_gain_str)
 static int tsl2591_compatible_int_time(struct tsl2591_chip *chip,
 					u32 als_integration_time)
 {
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(tsl2591_integration_opts); ++i) {
-		if (tsl2591_integration_opts[i] == als_integration_time) {
-			chip->als_settings.als_int_time = als_integration_time;
-			break;
-		}
-		if (i == (ARRAY_SIZE(tsl2591_integration_opts) - 1))
-			return -EINVAL;
+	switch (als_integration_time) {
+	case TSL2591_CTRL_ALS_INTEGRATION_100MS:
+	case TSL2591_CTRL_ALS_INTEGRATION_200MS:
+	case TSL2591_CTRL_ALS_INTEGRATION_300MS:
+	case TSL2591_CTRL_ALS_INTEGRATION_400MS:
+	case TSL2591_CTRL_ALS_INTEGRATION_500MS:
+	case TSL2591_CTRL_ALS_INTEGRATION_600MS:
+		chip->als_settings.als_int_time = als_integration_time;
+		return 0;
+	default:
+		break;
 	}
 
-	return 0;
+	return -EINVAL;
+
 }
 
 static int tsl2591_compatible_gain(struct tsl2591_chip *chip, u32 als_gain)
 {
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(tsl2591_gain_opts); ++i) {
-		if (tsl2591_gain_opts[i] == als_gain) {
-			chip->als_settings.als_gain = als_gain;
-			break;
-		}
-		if (i == (ARRAY_SIZE(tsl2591_gain_opts) - 1))
-			return -EINVAL;
+	switch (als_gain) {
+	case TSL2591_CTRL_ALS_LOW_GAIN:
+	case TSL2591_CTRL_ALS_MED_GAIN:
+	case TSL2591_CTRL_ALS_HIGH_GAIN:
+	case TSL2591_CTRL_ALS_MAX_GAIN:
+		chip->als_settings.als_gain = als_gain;
+		return 0;
+	default:
+		break;
 	}
 
-	return 0;
+	return -EINVAL;
+}
+
+static int tsl2591_compatible_als_persist(struct tsl2591_chip *chip,
+					u32 als_persist)
+{
+	switch (als_persist) {
+	case TSL2591_PRST_ALS_INT_CYCLE_0:
+	case TSL2591_PRST_ALS_INT_CYCLE_ANY:
+	case TSL2591_PRST_ALS_INT_CYCLE_2:
+	case TSL2591_PRST_ALS_INT_CYCLE_3:
+	case TSL2591_PRST_ALS_INT_CYCLE_5:
+	case TSL2591_PRST_ALS_INT_CYCLE_10:
+	case TSL2591_PRST_ALS_INT_CYCLE_15:
+	case TSL2591_PRST_ALS_INT_CYCLE_20:
+	case TSL2591_PRST_ALS_INT_CYCLE_25:
+	case TSL2591_PRST_ALS_INT_CYCLE_30:
+	case TSL2591_PRST_ALS_INT_CYCLE_35:
+	case TSL2591_PRST_ALS_INT_CYCLE_40:
+	case TSL2591_PRST_ALS_INT_CYCLE_45:
+	case TSL2591_PRST_ALS_INT_CYCLE_50:
+	case TSL2591_PRST_ALS_INT_CYCLE_55:
+	case TSL2591_PRST_ALS_INT_CYCLE_60:
+		chip->als_settings.als_persist = als_persist;
+		return 0;
+	default:
+		break;
+	}
+
+	return -EINVAL;
 }
 
 static int tsl2591_wait_adc_complete(struct tsl2591_chip *chip)
@@ -453,10 +471,25 @@ static int tsl2591_als_thresholds(struct tsl2591_chip *chip)
 	struct tsl2591_settings als_settings = chip->als_settings;
 	int ret;
 
-	u8 als_lower_l = (als_settings.als_lower_threshold & 0x00FF);
-	u8 als_lower_h = ((als_settings.als_lower_threshold >> 8) & 0x00FF);
-	u8 als_upper_l = (als_settings.als_upper_threshold & 0x00FF);
-	u8 als_upper_h = ((als_settings.als_upper_threshold >> 8) & 0x00FF);
+	u8 als_lower_l;
+	u8 als_lower_h;
+	u8 als_upper_l;
+	u8 als_upper_h;
+
+	if (als_settings.als_lower_threshold >= als_settings.als_upper_threshold) {
+		dev_warn(&client->dev, "lower threshold higher than upper\n");
+		return -EINVAL;
+	}
+
+	if (als_settings.als_upper_threshold > ALS_MAX_VALUE) {
+		dev_warn(&client->dev, "upper threshold higher than max\n");
+		return -EINVAL;
+	}
+
+	als_lower_l = (als_settings.als_lower_threshold & 0x00FF);
+	als_lower_h = ((als_settings.als_lower_threshold >> 8) & 0x00FF);
+	als_upper_l = (als_settings.als_upper_threshold & 0x00FF);
+	als_upper_h = ((als_settings.als_upper_threshold >> 8) & 0x00FF);
 
 	dev_info(&client->dev, "Setting configuration - als lower l: %#04x\n",
 				als_lower_l);
@@ -468,8 +501,7 @@ static int tsl2591_als_thresholds(struct tsl2591_chip *chip)
 				als_upper_h);
 
 	ret = i2c_smbus_write_byte_data(client, TSL2591_CMD_NOP |
-		TSL2591_PERSIST,
-		TSL2591_PRST_ALS_INT_CYCLE_2);
+		TSL2591_PERSIST, als_settings.als_persist);
 
 	if (ret < 0)
 		dev_err(&client->dev,
@@ -646,18 +678,120 @@ calibrate_error:
 	return -EINVAL;
 }
 
+static ssize_t in_illuminance_lower_threshold_show(struct device *dev,
+						struct device_attribute *attr,
+						char *buf)
+{
+	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct tsl2591_chip *chip = iio_priv(indio_dev);
+	int ret;
+
+	mutex_lock(&chip->als_mutex);
+	ret = sprintf(buf, "%d\n", chip->als_settings.als_lower_threshold);
+	mutex_unlock(&chip->als_mutex);
+
+	return ret;
+}
+
+static ssize_t in_illuminance_lower_threshold_store(struct device *dev,
+						 struct device_attribute *attr,
+						 const char *buf, size_t len)
+{
+	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct tsl2591_chip *chip = iio_priv(indio_dev);
+	struct i2c_client *client = chip->client;
+
+	int value;
+
+	if (kstrtoint(buf, 0, &value) || !value)
+		return -EINVAL;
+
+	mutex_lock(&chip->als_mutex);
+
+	if (value >= ALS_MAX_VALUE ||
+		value >= chip->als_settings.als_upper_threshold)
+		goto calibrate_error;
+	else
+		chip->als_settings.als_lower_threshold = value;
+
+	if (tsl2591_als_thresholds(chip))
+		goto calibrate_error;
+
+	mutex_unlock(&chip->als_mutex);
+
+	return len;
+
+calibrate_error:
+	dev_err(&client->dev, "Failed to calibrate sensor\n");
+	mutex_unlock(&chip->als_mutex);
+	return -EINVAL;
+}
+
+static ssize_t in_illuminance_upper_threshold_show(struct device *dev,
+						struct device_attribute *attr,
+						char *buf)
+{
+	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct tsl2591_chip *chip = iio_priv(indio_dev);
+	int ret;
+
+	mutex_lock(&chip->als_mutex);
+	ret = sprintf(buf, "%d\n", chip->als_settings.als_upper_threshold);
+	mutex_unlock(&chip->als_mutex);
+
+	return ret;
+}
+
+static ssize_t in_illuminance_upper_threshold_store(struct device *dev,
+						 struct device_attribute *attr,
+						 const char *buf, size_t len)
+{
+	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct tsl2591_chip *chip = iio_priv(indio_dev);
+	struct i2c_client *client = chip->client;
+
+	int value;
+
+	if (kstrtoint(buf, 0, &value) || !value)
+		return -EINVAL;
+
+	mutex_lock(&chip->als_mutex);
+
+	if (value > ALS_MAX_VALUE ||
+		value <= chip->als_settings.als_lower_threshold)
+		goto calibrate_error;
+	else
+		chip->als_settings.als_upper_threshold = value;
+
+	if (tsl2591_als_thresholds(chip))
+		goto calibrate_error;
+
+	mutex_unlock(&chip->als_mutex);
+
+	return len;
+
+calibrate_error:
+	dev_err(&client->dev, "Failed to calibrate sensor\n");
+	mutex_unlock(&chip->als_mutex);
+	return -EINVAL;
+}
+
 static IIO_CONST_ATTR(in_illuminance_integration_time_available_ms,
 				"100 200 300 400 500 600");
 static IIO_CONST_ATTR(in_illuminance_gain_available,
 				"low med high max");
 static IIO_DEVICE_ATTR_RW(in_illuminance_integration_time, 0);
 static IIO_DEVICE_ATTR_RW(in_illuminance_gain, 0);
+static IIO_DEVICE_ATTR_RW(in_illuminance_lower_threshold, 0);
+static IIO_DEVICE_ATTR_RW(in_illuminance_upper_threshold, 0);
 
 static struct attribute *sysfs_attrs_ctrl[] = {
 	&iio_const_attr_in_illuminance_integration_time_available_ms.dev_attr.attr,
 	&iio_const_attr_in_illuminance_gain_available.dev_attr.attr,
 	&iio_dev_attr_in_illuminance_integration_time.dev_attr.attr,
 	&iio_dev_attr_in_illuminance_gain.dev_attr.attr,
+	&iio_dev_attr_in_illuminance_lower_threshold.dev_attr.attr,
+	&iio_dev_attr_in_illuminance_upper_threshold.dev_attr.attr,
 	NULL
 };
 
@@ -813,6 +947,7 @@ static int tsl2591_probe_of(struct tsl2591_chip *chip)
 
 	u32 als_integration_time;
 	u32 als_gain;
+	u32 als_persist;
 	u32 als_lower_threshold;
 	u32 als_upper_threshold;
 
@@ -830,7 +965,7 @@ static int tsl2591_probe_of(struct tsl2591_chip *chip)
 		chip->als_settings.als_int_time = DEFAULT_ALS_INTEGRATION_TIME;
 	} else {
 		if (tsl2591_compatible_int_time(chip, als_integration_time)) {
-			dev_warn(dev, "setting default als-integration-time\n");
+			dev_warn(dev, "Invalid dt entry, setting default als-integration-time\n");
 			chip->als_settings.als_int_time
 				= DEFAULT_ALS_INTEGRATION_TIME;
 		}
@@ -846,11 +981,27 @@ static int tsl2591_probe_of(struct tsl2591_chip *chip)
 		chip->als_settings.als_int_time = DEFAULT_ALS_GAIN;
 	} else {
 		if (tsl2591_compatible_gain(chip, als_gain)) {
-			dev_warn(dev, "setting default als-gain\n");
+			dev_warn(dev, "Invalid dt entry, setting default als-gain\n");
 			chip->als_settings.als_gain = DEFAULT_ALS_GAIN;
 		}
 		dev_info(dev, "als-gain = %#04x\n",
 			chip->als_settings.als_gain);
+	}
+
+	ret = of_property_read_u32(np, "als-persist", &als_persist);
+
+	if (ret) {
+		dev_warn(dev,
+			"als-persist not defined. Setting default: %#04x\n",
+			DEFAULT_ALS_PERSIST);
+		chip->als_settings.als_persist = DEFAULT_ALS_PERSIST;
+	} else {
+		if (tsl2591_compatible_als_persist(chip, als_persist)) {
+			dev_warn(dev, "Invalid dt entry, setting default als-persist\n");
+			chip->als_settings.als_persist = DEFAULT_ALS_PERSIST;
+		}
+		dev_info(dev, "als-persist = %#04x\n",
+			chip->als_settings.als_persist);
 	}
 
 	ret = of_property_read_u32(np, "als-lower-threshold",
@@ -862,8 +1013,8 @@ static int tsl2591_probe_of(struct tsl2591_chip *chip)
 		chip->als_settings.als_lower_threshold
 			= DEFAULT_ALS_LOWER_THRESHOLD;
 	} else {
-		if (als_lower_threshold > ALS_MAX_VALUE) {
-			dev_warn(dev, "setting default als-lower-threshold\n");
+		if (als_lower_threshold >= ALS_MAX_VALUE) {
+			dev_warn(dev, "Invalid dt entry, setting default als-lower-threshold\n");
 			chip->als_settings.als_lower_threshold
 				= DEFAULT_ALS_LOWER_THRESHOLD;
 		} else {
@@ -883,7 +1034,7 @@ static int tsl2591_probe_of(struct tsl2591_chip *chip)
 			= DEFAULT_ALS_UPPER_THRESHOLD;
 	} else {
 		if (als_upper_threshold > ALS_MAX_VALUE) {
-			dev_warn(dev, "setting default als-upper-threshold\n");
+			dev_warn(dev, "Invalid dt entry, setting default als-upper-threshold\n");
 			chip->als_settings.als_upper_threshold
 				= DEFAULT_ALS_UPPER_THRESHOLD;
 		} else {
@@ -904,12 +1055,14 @@ static int tsl2591_default_config(struct tsl2591_chip *chip)
 
 	chip->als_settings.als_int_time = DEFAULT_ALS_INTEGRATION_TIME;
 	chip->als_settings.als_int_time = DEFAULT_ALS_GAIN;
+	chip->als_settings.als_persist = DEFAULT_ALS_PERSIST;
 	chip->als_settings.als_lower_threshold = DEFAULT_ALS_LOWER_THRESHOLD;
 	chip->als_settings.als_upper_threshold = DEFAULT_ALS_UPPER_THRESHOLD;
 
 	dev_dbg(dev, "als-integration-time = %d\n",
 		chip->als_settings.als_int_time);
 	dev_dbg(dev, "als-gain = %d\n", chip->als_settings.als_gain);
+	dev_dbg(dev, "als-persist = %d\n", chip->als_settings.als_persist);
 	dev_dbg(dev, "als-lower-threshold = %d\n",
 		chip->als_settings.als_lower_threshold);
 	dev_dbg(dev, "als-upper-threshold = %d\n",
@@ -1037,7 +1190,7 @@ static int tsl2591_remove(struct i2c_client *client)
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 	struct tsl2591_chip *chip = iio_priv(indio_dev);
 
-	dev_info(&client->dev, "Removing device.\n");
+	dev_dbg(&client->dev, "Removing device.\n");
 
 	pm_runtime_disable(&client->dev);
 	pm_runtime_set_suspended(&client->dev);

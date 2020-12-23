@@ -397,6 +397,7 @@ static int tsl2591_get_lux_data(struct iio_dev *indio_dev)
 	dev_dbg(&client->dev, "both: %d\n", chip->als_readings.als_ch0);
 	dev_dbg(&client->dev, "ir: %d\n", chip->als_readings.als_ch1);
 
+	/* Visible light is channel 0 - channel 1 i.e. both - IR = visible */
 	chip->als_readings.als_visible =
 		chip->als_readings.als_ch0 - chip->als_readings.als_ch1;
 
@@ -829,6 +830,10 @@ static const struct iio_chan_spec tsl2591_channels[] = {
 		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),
 	},
 	{
+		.type = IIO_INTENSITY,
+		.info_mask_separate = BIT(IIO_CHAN_INFO_PROCESSED),
+	},
+	{
 		.type = IIO_LIGHT,
 		.info_mask_separate = BIT(IIO_CHAN_INFO_PROCESSED),
 	},
@@ -877,6 +882,13 @@ static int tsl2591_read_raw(struct iio_dev *indio_dev,
 			*val = chip->als_readings.als_lux_int;
 			*val2 = (chip->als_readings.als_lux_decimal * 1000);
 			ret = IIO_VAL_INT_PLUS_MICRO;
+		} else if (chan->type == IIO_INTENSITY) {
+			ret = tsl2591_get_lux_data(indio_dev);
+			if (ret < 0)
+				break;
+
+			*val = chip->als_readings.als_visible;
+			ret = IIO_VAL_INT;
 		}
 		break;
 	}

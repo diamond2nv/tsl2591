@@ -437,9 +437,9 @@ static int tsl2591_als_calibrate(struct tsl2591_chip *chip)
 
 	u8 configuration;
 
-	dev_info(&client->dev, "Setting configuration - als_int_time: %#04x\n",
+	dev_dbg(&client->dev, "Setting configuration - als_int_time: %#04x\n",
 				als_settings.als_int_time);
-	dev_info(&client->dev, "Setting configuration - als_gain: %#04x\n",
+	dev_dbg(&client->dev, "Setting configuration - als_gain: %#04x\n",
 				als_settings.als_gain);
 
 	configuration = als_settings.als_int_time | als_settings.als_gain;
@@ -492,13 +492,13 @@ static int tsl2591_als_thresholds(struct tsl2591_chip *chip)
 	als_upper_l = (als_settings.als_upper_threshold & 0x00FF);
 	als_upper_h = ((als_settings.als_upper_threshold >> 8) & 0x00FF);
 
-	dev_info(&client->dev, "Setting configuration - als lower l: %#04x\n",
+	dev_dbg(&client->dev, "Setting configuration - als lower l: %#04x\n",
 				als_lower_l);
-	dev_info(&client->dev, "Setting configuration - als lower h: %#04x\n",
+	dev_dbg(&client->dev, "Setting configuration - als lower h: %#04x\n",
 				als_lower_h);
-	dev_info(&client->dev, "Setting configuration - als upper l: %#04x\n",
+	dev_dbg(&client->dev, "Setting configuration - als upper l: %#04x\n",
 				als_upper_l);
-	dev_info(&client->dev, "Setting configuration - als upper h: %#04x\n",
+	dev_dbg(&client->dev, "Setting configuration - als upper h: %#04x\n",
 				als_upper_h);
 
 	ret = i2c_smbus_write_byte_data(client, TSL2591_CMD_NOP |
@@ -777,22 +777,73 @@ calibrate_error:
 	return -EINVAL;
 }
 
+static ssize_t in_illuminance_persist_filter_show(struct device *dev,
+						struct device_attribute *attr,
+						char *buf)
+{
+	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct tsl2591_chip *chip = iio_priv(indio_dev);
+	int ret;
+
+	mutex_lock(&chip->als_mutex);
+	ret = sprintf(buf, "%d\n", chip->als_settings.als_persist);
+	mutex_unlock(&chip->als_mutex);
+
+	return ret;
+}
+
+static ssize_t in_illuminance_persist_filter_store(struct device *dev,
+						 struct device_attribute *attr,
+						 const char *buf, size_t len)
+{
+	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct tsl2591_chip *chip = iio_priv(indio_dev);
+	struct i2c_client *client = chip->client;
+
+	int value;
+
+	if (kstrtoint(buf, 0, &value) || !value)
+		return -EINVAL;
+
+	mutex_lock(&chip->als_mutex);
+
+	if (tsl2591_compatible_als_persist(chip, value))
+		goto calibrate_error;
+
+	if (tsl2591_als_thresholds(chip))
+		goto calibrate_error;
+
+	mutex_unlock(&chip->als_mutex);
+
+	return len;
+
+calibrate_error:
+	dev_err(&client->dev, "Failed to calibrate sensor\n");
+	mutex_unlock(&chip->als_mutex);
+	return -EINVAL;
+}
+
 static IIO_CONST_ATTR(in_illuminance_integration_time_available_ms,
 				"100 200 300 400 500 600");
 static IIO_CONST_ATTR(in_illuminance_gain_available,
 				"low med high max");
+static IIO_CONST_ATTR(in_illuminance_persist_filter_available,
+				"0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15");
 static IIO_DEVICE_ATTR_RW(in_illuminance_integration_time, 0);
 static IIO_DEVICE_ATTR_RW(in_illuminance_gain, 0);
 static IIO_DEVICE_ATTR_RW(in_illuminance_lower_threshold, 0);
 static IIO_DEVICE_ATTR_RW(in_illuminance_upper_threshold, 0);
+static IIO_DEVICE_ATTR_RW(in_illuminance_persist_filter, 0);
 
 static struct attribute *sysfs_attrs_ctrl[] = {
 	&iio_const_attr_in_illuminance_integration_time_available_ms.dev_attr.attr,
 	&iio_const_attr_in_illuminance_gain_available.dev_attr.attr,
+	&iio_const_attr_in_illuminance_persist_filter_available.dev_attr.attr,
 	&iio_dev_attr_in_illuminance_integration_time.dev_attr.attr,
 	&iio_dev_attr_in_illuminance_gain.dev_attr.attr,
 	&iio_dev_attr_in_illuminance_lower_threshold.dev_attr.attr,
 	&iio_dev_attr_in_illuminance_upper_threshold.dev_attr.attr,
+	&iio_dev_attr_in_illuminance_persist_filter.dev_attr.attr,
 	NULL
 };
 
@@ -951,10 +1002,9 @@ static irqreturn_t tsl2591_irq_handler(int irq, void *private)
 {
 	struct iio_dev *dev_info = private;
 	struct tsl2591_chip *chip = iio_priv(dev_info);
-	struct i2c_client *client = chip->client;
+
 	s64 timestamp = iio_get_time_ns(dev_info);
 
-	dev_info(&client->dev, "Interrupt received, sending event\n");
 	iio_push_event(dev_info,
 			IIO_UNMOD_EVENT_CODE(IIO_LIGHT, 0,
 			IIO_EV_TYPE_THRESH,
@@ -1136,7 +1186,7 @@ static int tsl2591_probe(struct i2c_client *client)
 #endif
 
 	if (client->irq) {
-		dev_info(&client->dev, "Registering interrupt\n");
+		dev_dbg(&client->dev, "Registering interrupt\n");
 		ret = devm_request_threaded_irq(&client->dev, client->irq,
 				NULL, tsl2591_irq_handler,
 				IRQF_TRIGGER_FALLING | IRQF_ONESHOT,

@@ -799,6 +799,20 @@ static const struct attribute_group tsl2591_attribute_group = {
 	.attrs = sysfs_attrs_ctrl,
 };
 
+static const struct iio_event_spec tsl2591_events[] = {
+	{
+		.type = IIO_EV_TYPE_THRESH,
+		.dir = IIO_EV_DIR_RISING,
+		.mask_separate = BIT(IIO_EV_INFO_VALUE) |
+				BIT(IIO_EV_INFO_ENABLE),
+	}, {
+		.type = IIO_EV_TYPE_THRESH,
+		.dir = IIO_EV_DIR_FALLING,
+		.mask_separate = BIT(IIO_EV_INFO_VALUE) |
+				BIT(IIO_EV_INFO_ENABLE),
+	},
+};
+
 static const struct iio_chan_spec tsl2591_channels[] = {
 	{
 		.type = IIO_INTENSITY,
@@ -810,6 +824,8 @@ static const struct iio_chan_spec tsl2591_channels[] = {
 		.type = IIO_INTENSITY,
 		.modified = 1,
 		.channel2 = IIO_MOD_LIGHT_BOTH,
+		.event_spec = tsl2591_events,
+		.num_event_specs = ARRAY_SIZE(tsl2591_events),
 		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),
 	},
 	{

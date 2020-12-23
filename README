@@ -32,3 +32,8 @@ dtc -O dtb -o <filename>-00A0.dtbo -b 0 -@ <filename>.dts
 Modify uEnv.txt - Adding dtbo as overlay in uEnv.txt
 uboot_overlay_addr0=/lib/firmware/<file0>.dtbo
 
+TOOLS FOR TESTING;
+lsiio - list iio devices
+iio_event_monitor - listen for events from driver
+
+make -C tools/iio LDFLAGS=-static cc=arm-linux-gnueabi-gcc

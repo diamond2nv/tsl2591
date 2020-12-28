@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2020 Joe Sandom <joe.sandom@outlook.com>
- *S
+ *
  * Datasheet Available at: https://ams.com/tsl25911
  *
  * @brief Device driver for the TAOS TSL2591. This is a very-high sensitivity

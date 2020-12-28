@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * Copyright (C) 2020 Joe Sandom <jgsandom@hotmail.co.uk>
+ * Copyright (C) 2020 Joe Sandom <joe.sandom@outlook.com>
  *S
  * Datasheet Available at: https://ams.com/tsl25911
  *
@@ -1294,6 +1294,6 @@ static struct i2c_driver tsl2591_driver = {
 };
 module_i2c_driver(tsl2591_driver);
 
-MODULE_AUTHOR("Joe Sandom <jgsandom@hotmail.co.uk>");
+MODULE_AUTHOR("Joe Sandom <joe.sandom@outlook.com>");
 MODULE_DESCRIPTION("TAOS tsl2591 ambient light sensor driver");
 MODULE_LICENSE("GPL");

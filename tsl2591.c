@@ -21,8 +21,8 @@
 #include <linux/iio/sysfs.h>
 #include <linux/iio/events.h>
 
-#define als_time_secs_to_ms(x) ((x + 1) * 100)
-#define als_time_ms_to_secs(x) ((x / 100) - 1)
+#define als_time_secs_to_ms(x) (((x) + 1) * 100)
+#define als_time_ms_to_secs(x) (((x) / 100) - 1)
 
 /* TSL2591 Register Set */
 #define TSL2591_ENABLE      0x00
@@ -161,6 +161,7 @@ struct tsl2591_settings {
 };
 
 struct tsl2591_chip {
+	/* Ambient light sensor mutex */
 	struct mutex als_mutex;
 	struct i2c_client *client;
 	struct tsl2591_settings als_settings;
@@ -219,20 +220,20 @@ static int tsl2591_gain_to_again(const u8 als_gain)
 
 static int tsl2591_gain_from_str(const char *als_gain_str)
 {
-	if (strstr(als_gain_str, TSL2591_CTRL_ALS_LOW_GAIN_LIT) != NULL)
+	if (strstr(als_gain_str, TSL2591_CTRL_ALS_LOW_GAIN_LIT))
 		return TSL2591_CTRL_ALS_LOW_GAIN;
-	else if (strstr(als_gain_str, TSL2591_CTRL_ALS_MED_GAIN_LIT) != NULL)
+	else if (strstr(als_gain_str, TSL2591_CTRL_ALS_MED_GAIN_LIT))
 		return TSL2591_CTRL_ALS_MED_GAIN;
-	else if (strstr(als_gain_str, TSL2591_CTRL_ALS_HIGH_GAIN_LIT) != NULL)
+	else if (strstr(als_gain_str, TSL2591_CTRL_ALS_HIGH_GAIN_LIT))
 		return TSL2591_CTRL_ALS_HIGH_GAIN;
-	else if (strstr(als_gain_str, TSL2591_CTRL_ALS_MAX_GAIN_LIT) != NULL)
+	else if (strstr(als_gain_str, TSL2591_CTRL_ALS_MAX_GAIN_LIT))
 		return TSL2591_CTRL_ALS_MAX_GAIN;
 	else
 		return -EINVAL;
 }
 
 static int tsl2591_compatible_int_time(struct tsl2591_chip *chip,
-					u32 als_integration_time)
+				      u32 als_integration_time)
 {
 	switch (als_integration_time) {
 	case TSL2591_CTRL_ALS_INTEGRATION_100MS:
@@ -248,7 +249,6 @@ static int tsl2591_compatible_int_time(struct tsl2591_chip *chip,
 	}
 
 	return -EINVAL;
-
 }
 
 static int tsl2591_compatible_gain(struct tsl2591_chip *chip, u32 als_gain)
@@ -268,7 +268,7 @@ static int tsl2591_compatible_gain(struct tsl2591_chip *chip, u32 als_gain)
 }
 
 static int tsl2591_compatible_als_persist(struct tsl2591_chip *chip,
-					u32 als_persist)
+					 u32 als_persist)
 {
 	switch (als_persist) {
 	case TSL2591_PRST_ALS_INT_CYCLE_0:
@@ -1039,13 +1039,14 @@ static int tsl2591_probe_of(struct tsl2591_chip *chip)
 
 	if (ret) {
 		dev_warn(dev,
-			 "als-integration-time not defined. Setting default: %d\n", DEFAULT_ALS_INTEGRATION_TIME);
+			 "Setting default als-integration-time: %d\n",
+			 DEFAULT_ALS_INTEGRATION_TIME);
 		chip->als_settings.als_int_time = DEFAULT_ALS_INTEGRATION_TIME;
 	} else {
 		if (tsl2591_compatible_int_time(chip, als_integration_time)) {
-			dev_warn(dev, "Invalid dt entry, setting default als-integration-time\n");
-			chip->als_settings.als_int_time
-				= DEFAULT_ALS_INTEGRATION_TIME;
+			dev_warn(dev, "Setting default als-integration-time\n");
+			chip->als_settings.als_int_time =
+				DEFAULT_ALS_INTEGRATION_TIME;
 		}
 		dev_info(dev, "als-integration-time = %#04x\n",
 			chip->als_settings.als_int_time);
@@ -1054,12 +1055,12 @@ static int tsl2591_probe_of(struct tsl2591_chip *chip)
 	ret = of_property_read_u32(np, "als-gain", &als_gain);
 
 	if (ret) {
-		dev_warn(dev, "als-gain not defined. Setting default: %#04x\n",
+		dev_warn(dev, "Setting default als-gain: %#04x\n",
 			DEFAULT_ALS_GAIN);
 		chip->als_settings.als_int_time = DEFAULT_ALS_GAIN;
 	} else {
 		if (tsl2591_compatible_gain(chip, als_gain)) {
-			dev_warn(dev, "Invalid dt entry, setting default als-gain\n");
+			dev_warn(dev, "Setting default als-gain\n");
 			chip->als_settings.als_gain = DEFAULT_ALS_GAIN;
 		}
 		dev_info(dev, "als-gain = %#04x\n",
@@ -1070,12 +1071,12 @@ static int tsl2591_probe_of(struct tsl2591_chip *chip)
 
 	if (ret) {
 		dev_warn(dev,
-			"als-persist not defined. Setting default: %#04x\n",
+			"Setting default als-persist: %#04x\n",
 			DEFAULT_ALS_PERSIST);
 		chip->als_settings.als_persist = DEFAULT_ALS_PERSIST;
 	} else {
 		if (tsl2591_compatible_als_persist(chip, als_persist)) {
-			dev_warn(dev, "Invalid dt entry, setting default als-persist\n");
+			dev_warn(dev, "Setting default als-persist\n");
 			chip->als_settings.als_persist = DEFAULT_ALS_PERSIST;
 		}
 		dev_info(dev, "als-persist = %#04x\n",
@@ -1087,16 +1088,18 @@ static int tsl2591_probe_of(struct tsl2591_chip *chip)
 
 	if (ret) {
 		dev_warn(dev,
-			"als-lower-threshold not defined. Setting default: %d\n", DEFAULT_ALS_LOWER_THRESHOLD);
-		chip->als_settings.als_lower_threshold
-			= DEFAULT_ALS_LOWER_THRESHOLD;
+			"Setting default als-lower-threshold: %d\n",
+			DEFAULT_ALS_LOWER_THRESHOLD);
+		chip->als_settings.als_lower_threshold =
+			DEFAULT_ALS_LOWER_THRESHOLD;
 	} else {
 		if (als_lower_threshold >= ALS_MAX_VALUE) {
-			dev_warn(dev, "Invalid dt entry, setting default als-lower-threshold\n");
-			chip->als_settings.als_lower_threshold
-				= DEFAULT_ALS_LOWER_THRESHOLD;
+			dev_warn(dev, "Setting default als-lower-threshold\n");
+			chip->als_settings.als_lower_threshold =
+				DEFAULT_ALS_LOWER_THRESHOLD;
 		} else {
-			chip->als_settings.als_lower_threshold = als_lower_threshold;
+			chip->als_settings.als_lower_threshold =
+				als_lower_threshold;
 		}
 		dev_info(dev, "als-lower-threshold = %d\n",
 			chip->als_settings.als_lower_threshold);
@@ -1107,16 +1110,18 @@ static int tsl2591_probe_of(struct tsl2591_chip *chip)
 
 	if (ret) {
 		dev_warn(dev,
-			"als-upper-threshold not defined. Setting default: %d\n", DEFAULT_ALS_UPPER_THRESHOLD);
-		chip->als_settings.als_upper_threshold
-			= DEFAULT_ALS_UPPER_THRESHOLD;
+			"Setting default als-upper-threshold: %d\n",
+			DEFAULT_ALS_UPPER_THRESHOLD);
+		chip->als_settings.als_upper_threshold =
+			DEFAULT_ALS_UPPER_THRESHOLD;
 	} else {
 		if (als_upper_threshold > ALS_MAX_VALUE) {
-			dev_warn(dev, "Invalid dt entry, setting default als-upper-threshold\n");
-			chip->als_settings.als_upper_threshold
-				= DEFAULT_ALS_UPPER_THRESHOLD;
+			dev_warn(dev, "Setting default als-upper-threshold\n");
+			chip->als_settings.als_upper_threshold =
+				DEFAULT_ALS_UPPER_THRESHOLD;
 		} else {
-			chip->als_settings.als_upper_threshold = als_upper_threshold;
+			chip->als_settings.als_upper_threshold =
+				als_upper_threshold;
 		}
 		dev_info(dev, "als-upper-threshold = %d\n",
 			chip->als_settings.als_upper_threshold);
